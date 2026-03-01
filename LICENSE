@@ -1,0 +1,20 @@
+GNU GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007
+
+Copyright (C) 2026 Atomix STM Project <maintainers@atomix-stm.org>
+
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+
+Preamble
+
+The GNU General Public License is a free, copyleft license for
+software and other kinds of works.
+
+... (Standard GPLv3 Text) ...
+
+COMMERCIAL LICENSE ADDENDUM:
+This software is also available under a Commercial License for 
+enterprise use. Use of this software in closed-source projects 
+requires a valid Commercial License from Advanced Concurrency Systems.
+Contact sales@atomix-stm.com for details.

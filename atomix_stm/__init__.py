@@ -1,0 +1,66 @@
+from .core import (
+    TransactionCoordinator,
+    Transaction,
+    Ref,
+    Atom,
+    PersistentVector,
+    PersistentHashMap,
+    STMQueue,
+    STMAgent,
+    STMVar,
+    dosync,
+    atomically,
+    transaction,
+    async_dosync,
+    retry,
+    alter,
+    commute,
+    write,
+    read,
+    ref,
+    atom,
+    STMDiagnostics,
+    STMException,
+    RetryException,
+    ConflictException,
+    TimeoutException,
+    ValidationException,
+    HistoryExpiredException,
+    InvariantViolationException
+)
+
+__version__ = "3.1.0"
+__author__ = "Atomix STM Maintainers"
+__license__ = "GPLv3 / Commercial"
+
+__all__ = [
+    'TransactionCoordinator',
+    'Transaction',
+    'Ref',
+    'Atom',
+    'PersistentVector',
+    'PersistentHashMap',
+    'STMQueue',
+    'STMAgent',
+    'STMVar',
+    'dosync',
+    'atomically',
+    'transaction',
+    'async_dosync',
+    'retry',
+    'alter',
+    'commute',
+    'write',
+    'read',
+    'ref',
+    'atom',
+    'STMDiagnostics',
+    'STMException',
+    'RetryException',
+    'ConflictException',
+    'TimeoutException',
+    'ValidationException',
+    'HistoryExpiredException',
+    'InvariantViolationException'
+]
+
