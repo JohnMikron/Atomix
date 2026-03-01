@@ -1,5 +1,5 @@
 """
-Atomix v3.0 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.1 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -9,8 +9,8 @@ Features:
 - MVCC with adaptive history management
 - Seqlock-based lock-free reads
 - Contention-aware retry scheduling
-- Background snapshot cleanup (The Reaper)
-- Persistent immutable data structures (Vector, HashMap)
+- Background snapshot cleanup (The Reaper) - Adaptive Scheduling
+- Persistent immutable data structures (Vector, HashMap) - Level Bloat Fix
 - STM-aware queues, agents, and variables
 - Comprehensive diagnostics and monitoring
 - Full type safety with generics
@@ -18,10 +18,9 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.0.0
-Date: 2026
-Author: Advanced Concurrency Systems
-License: MIT
+Version: 3.1.0
+Author: Atomix STM Project
+License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
