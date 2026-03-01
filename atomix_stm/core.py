@@ -18,9 +18,7 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.1.0
-Date: 2026
-Author: Advanced Concurrency Systems
+Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
@@ -1862,7 +1860,7 @@ def _cleanup_stm():
     coordinator = TransactionCoordinator()
     if hasattr(coordinator, '_reaper'):
         coordinator._reaper.stop()
-    logger.info("STM System shutdown clean")
+    logger.info("Atomix STM System shutdown clean")
 
 
 
