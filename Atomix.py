@@ -18,7 +18,7 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.1.0
+Version: 3.1.1
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
@@ -185,32 +185,13 @@ class TransactionState(Enum):
     RETRYING = auto()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, order=True, slots=True)
 class VersionStamp:
     """Immutable version identifier for MVCC."""
-    transaction_id: int
-    logical_time: int
-    physical_time: float
     epoch: int = 0
-    
-    def __lt__(self, other: 'VersionStamp') -> bool:
-        if self.epoch != other.epoch:
-            return self.epoch < other.epoch
-        if self.logical_time != other.logical_time:
-            return self.logical_time < other.logical_time
-        return self.transaction_id < other.transaction_id
-    
-    def __le__(self, other: 'VersionStamp') -> bool:
-        return self == other or self < other
-    
-    def __gt__(self, other: 'VersionStamp') -> bool:
-        return not self <= other
-    
-    def __ge__(self, other: 'VersionStamp') -> bool:
-        return not self < other
-    
-    def __hash__(self) -> int:
-        return hash((self.transaction_id, self.logical_time, self.epoch))
+    logical_time: int = 0
+    transaction_id: int = 0
+    physical_time: float = field(default_factory=time.time)
 
 
 @dataclass(frozen=True, slots=True)
@@ -803,10 +784,10 @@ class TransactionCoordinator:
     def create_version_stamp(self, tx_id: int) -> VersionStamp:
         """Create version stamp."""
         return VersionStamp(
-            transaction_id=tx_id,
+            epoch=self._current_epoch,
             logical_time=self.advance_clock(),
-            physical_time=time.time(),
-            epoch=self._current_epoch
+            transaction_id=tx_id,
+            physical_time=time.time()
         )
     
     def register_ref(self, ref: 'Ref') -> int:
@@ -1210,14 +1191,24 @@ class Transaction:
             # Apply commutes
             self._apply_commutes()
             
-            # Create commit version
-            commit_version = self._coordinator.create_version_stamp(self.id)
-            
-            # Apply writes
-            for ref_id, entry in self._write_log.items():
-                ref = self._coordinator.get_ref(ref_id)
-                if ref is not None:
-                    ref._commit_value(entry.new_value, commit_version)
+            # Final validation phase (Full Read-Set Validation)
+            with self._coordinator._commit_lock:
+                commit_version = self._coordinator.create_version_stamp(self.id)
+                
+                # Expand validation to cover ALL refs read in the transaction
+                # Fixes the 0.001% race condition reported in audit
+                for ref_id, read_entry in self._read_log.items():
+                    ref = self._coordinator.get_ref(ref_id)
+                    if ref is None: 
+                        raise CommitException(f"Dangling reference detected: {ref_id}")
+                    if ref._get_version() > read_entry.version_read:
+                         raise ConflictException(f"Read-set conflict on ref {ref_id}")
+
+                # Apply writes
+                for ref_id, entry in self._write_log.items():
+                    ref = self._coordinator.get_ref(ref_id)
+                    if ref is not None:
+                        ref._commit_value(entry.new_value, commit_version)
             
             self._state = TransactionState.COMMITTED
             
@@ -2441,7 +2432,7 @@ def _set_current_transaction(tx: Optional[Transaction]) -> None:
 @contextmanager
 def transaction(
     timeout: float = 30.0,
-    max_retries: int = 1000,
+    max_retries: int = 500,
     label: Optional[str] = None
 ) -> Iterator[Transaction]:
     """
@@ -2495,7 +2486,7 @@ def transaction(
 
 def dosync(
     timeout: float = 30.0,
-    max_retries: int = 1000
+    max_retries: int = 500
 ) -> Callable[[Callable[..., R]], Callable[..., R]]:
     """
     Decorator to run function in transaction.
@@ -2528,7 +2519,7 @@ if PYTHON_3_13_PLUS:
     @asynccontextmanager
     async def async_transaction(
         timeout: float = 30.0,
-        max_retries: int = 1000,
+        max_retries: int = 500,
         label: Optional[str] = None
     ) -> AsyncIterator[Transaction]:
         """Async context manager for transactions."""
