@@ -4,9 +4,7 @@ setup(
     name="atomix-stm",
     version="3.1.1",
     packages=find_packages(),
-    install_requires=[
-        "psutil>=5.9.0",
-    ],
+    install_requires=[],
     author="Atomix STM Maintainers",
     author_email="maintainers@atomix-stm.org",
     description="Production-grade Software Transactional Memory for Python 3.13+",

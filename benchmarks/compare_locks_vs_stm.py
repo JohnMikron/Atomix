@@ -5,7 +5,7 @@ from atomix_stm import Ref, atomically, dosync
 
 # --- Configuration ---
 NUM_THREADS = [1, 2, 4, 8, 16]
-ITERATIONS = 100_000
+ITERATIONS = 10_000
 
 def bench_lock(num_threads):
     counter = 0
