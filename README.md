@@ -59,6 +59,9 @@ print(f"Balance B: {balance_b.value}") # 700
 pip install atomix-stm
 ```
 
+> [!NOTE]
+> **Compatibility**: Atomix STM is compatible with **Python 3.9 through 3.14**. While it works perfectly on standard Python with the GIL, it provides maximum performance gains on **Python 3.13+** with free-threading enabled.
+
 ---
 
 ## 🛠 Features
