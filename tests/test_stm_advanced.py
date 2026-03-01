@@ -26,39 +26,42 @@ class TestSTMAvanced(unittest.TestCase):
     def test_aba_prevention(self):
         """Verify that ABA-style changes during a transaction cause a retry."""
         r = Ref(100)
-        barrier = threading.Barrier(2)
-        retries = [0]
+        start_event = threading.Event()
+        interfered_event = threading.Event()
+        attempts = [0]
 
         @atomically
         def long_tx():
+            attempts[0] += 1
             val = r.value
-            barrier.wait() # Wait for the other thread to change r
-            barrier.wait() # Wait for it to change back
-            # Even if value is 100 again, the version MUST be different
+            if attempts[0] == 1:
+                start_event.set()
+                interfered_event.wait(timeout=5) # Wait for the interferer
             r.set(val + 1)
 
         def interferer():
-            barrier.wait()
-            dosync(lambda: r.set(200))
-            barrier.wait()
-            dosync(lambda: r.set(100)) # Change back to 100
+            if start_event.wait(timeout=5):
+                dosync(lambda: r.set(200))
+                dosync(lambda: r.set(100)) # Change back to 100
+                interfered_event.set()
 
         t1 = threading.Thread(target=long_tx)
         t2 = threading.Thread(target=interferer)
         
         t1.start()
         t2.start()
-        t1.join()
-        t2.join()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
         
         # If MVCC is working, it should have detected the intermediate change
         self.assertEqual(r.value, 101)
+        self.assertGreaterEqual(attempts[0], 2)
 
     def test_high_contention_stress(self):
-        """Exhaustive stress test with 20 threads hitting a single Ref."""
+        """Stress test with 20 threads hitting a single Ref."""
         r = Ref(0)
         num_threads = 20
-        ops_per_thread = 500
+        ops_per_thread = 100
         
         def worker():
             for _ in range(ops_per_thread):

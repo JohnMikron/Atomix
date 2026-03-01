@@ -1590,7 +1590,13 @@ class STMAgent(Generic[T]):
     Sends actions to a thread pool.
     """
     
-    _pool = asyncio.get_event_loop() if PYTHON_3_13_PLUS else None
+    if PYTHON_3_13_PLUS:
+        try:
+            _pool = asyncio.get_running_loop()
+        except RuntimeError:
+            _pool = None
+    else:
+        _pool = None
     
     def __init__(self, initial_value: T, name: Optional[str] = None):
         self._ref = Ref(initial_value, name=name)
