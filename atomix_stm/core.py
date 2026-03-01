@@ -184,32 +184,13 @@ class TransactionState(Enum):
     RETRYING = auto()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, order=True)
 class VersionStamp:
-    """Immutable version identifier for MVCC."""
-    transaction_id: int
+    """Unique version identifier."""
+    epoch: int  # Epoch first for major ordering
     logical_time: int
+    transaction_id: int
     physical_time: float
-    epoch: int = 0
-    
-    def __lt__(self, other: 'VersionStamp') -> bool:
-        if self.epoch != other.epoch:
-            return self.epoch < other.epoch
-        if self.logical_time != other.logical_time:
-            return self.logical_time < other.logical_time
-        return self.transaction_id < other.transaction_id
-    
-    def __le__(self, other: 'VersionStamp') -> bool:
-        return self == other or self < other
-    
-    def __gt__(self, other: 'VersionStamp') -> bool:
-        return not self <= other
-    
-    def __ge__(self, other: 'VersionStamp') -> bool:
-        return not self < other
-    
-    def __hash__(self) -> int:
-        return hash((self.transaction_id, self.logical_time, self.epoch))
 
 
 @dataclass(frozen=True, slots=True)
@@ -737,10 +718,10 @@ class TransactionCoordinator:
 
     def create_version_stamp(self, tx_id: int) -> VersionStamp:
         return VersionStamp(
-            transaction_id=tx_id,
             logical_time=self.advance_clock(),
-            physical_time=time.time(),
-            epoch=self._current_epoch
+            transaction_id=tx_id,
+            epoch=self._current_epoch,
+            physical_time=time.time()
         )
 
     def register_ref(self, ref: 'Ref') -> int:
@@ -1009,11 +990,10 @@ class Transaction:
         if not success:
             raise ConflictException("Write conflict detected", conflicts or frozenset())
 
-        self.state = TransactionState.COMMITTING
-        new_version = self.coordinator.create_version_stamp(self.id)
-        
         # Perform atomic update
         with self.coordinator._commit_lock:
+            new_version = self.coordinator.create_version_stamp(self.id)
+            
             # Final validation phase
             for ref_id, write_entry in self.write_log.items():
                 ref = self.coordinator.get_ref(ref_id)
