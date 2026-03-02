@@ -157,9 +157,10 @@ class ValidationException(STMException):
     pass
 
 
-class HistoryExpiredException(STMException):
-    """History snapshot expired."""
-    pass
+class HistoryExpiredException(ConflictException):
+    """MVCC history expired."""
+    def __init__(self, message: str, ref_id: int):
+        super().__init__(message, frozenset([ref_id]))
 
 
 class InvariantViolationException(STMException):
@@ -448,15 +449,8 @@ class HistoryManager:
                 if recent_rate > self._access_threshold:
                     base = int(base * 1.5)
         
-        # Check memory pressure
-        try:
-            import psutil
-            memory_percent = psutil.virtual_memory().percent / 100.0
-            if memory_percent > self._memory_threshold:
-                base = max(self._min_history, int(base * 0.5))
-                self._memory_pressure_events += 1
-        except ImportError:
-            pass
+        # Memory pressure check removed to simplify dependencies
+        pass
         
         return base
     
@@ -755,14 +749,19 @@ class TransactionCoordinator:
         return frozenset(conflicting) if conflicting else None
 
 
+    def prepare_commit_inside_lock(self, tx: 'Transaction', read_log: Dict[int, ReadLogEntry], write_set: Set[int]) -> Tuple[bool, Optional[FrozenSet[int]]]:
+        """Check conflicts assuming lock is already held."""
+        read_set = {rid: entry.version_read for rid, entry in read_log.items()}
+        conflicts = self.detect_conflicts(tx, read_set, write_set)
+        if conflicts:
+            with self._stats_lock:
+                self._stats["total_conflicts"] += 1
+            return False, conflicts
+        return True, None
+
     def prepare_commit(self, tx: 'Transaction', read_set: Dict[int, VersionStamp], write_set: Set[int]) -> Tuple[bool, Optional[FrozenSet[int]]]:
         with self._commit_lock:
-            conflicts = self.detect_conflicts(tx, read_set, write_set)
-            if conflicts:
-                with self._stats_lock:
-                    self._stats["total_conflicts"] += 1
-                return False, conflicts
-            return True, None
+            return self.prepare_commit_inside_lock(tx, {rid: ReadLogEntry(rid, rs, 0) for rid, rs in read_set.items()}, write_set)
 
     def record_commit(self) -> None:
         with self._stats_lock:
@@ -884,7 +883,7 @@ class Transaction:
         self._depth -= 1
         if exc_type is not None:
             if not issubclass(exc_type, (RetryException, ConflictException)):
-                self.abort()
+                self.abort() 
             return False  # Propagate original exception
             
         if self._depth == 0:
@@ -951,13 +950,14 @@ class Transaction:
         self.state = TransactionState.RETRYING
         raise RetryException("Manual retry requested", self.retry_count)
 
-    def abort(self) -> None:
+    def abort(self, reason: Optional[str] = None) -> None:
         self.state = TransactionState.ABORTED
         for hook in self.on_abort_hooks:
             try: hook()
             except Exception: pass
         self.coordinator.record_abort()
-        raise TransactionAbortedException(f"Transaction {self.id} aborted")
+        if reason:
+            raise TransactionAbortedException(f"Transaction {self.id} aborted: {reason}")
 
     def _prepare(self) -> Tuple[bool, Optional[FrozenSet[int]]]:
         self.state = TransactionState.PREPARING
@@ -983,25 +983,25 @@ class Transaction:
                     is_commutative=True
                 )
 
-        success, conflicts = self._prepare()
-        if not success:
-            raise ConflictException("Write conflict detected", conflicts or frozenset())
-
         # Perform atomic update
         with self.coordinator._commit_lock:
-            new_version = self.coordinator.create_version_stamp(self.id)
-            
-            # Final validation phase (Full Read-Set Validation)
-            # This ensures that ALL values read during the transaction are still consistent,
-            # not just those in the write log. Fixes the 0.001% race condition.
+            # 1. 2PC Prepare (Consistency Check)
+            success, conflicts = self.coordinator.prepare_commit_inside_lock(self, self.read_log, self.write_log)
+            if not success:
+                 # Map read log versions to a set of ref IDs for the exception
+                raise ConflictException("Write conflict detected during prepare", conflicts or frozenset())
+
+            # 2. Final validation phase (Read-Set Validation)
+            # This ensures that ALL values read during the transaction are still consistent.
             for ref_id, read_entry in self.read_log.items():
                 ref = self.coordinator.get_ref(ref_id)
                 if ref is None: 
                     raise CommitException(f"Dangling reference detected: {ref_id}")
-                if ref._get_version() > read_entry.version_read:
-                     raise ConflictException(f"Read-set conflict on ref {ref_id}")
+                if ref._get_version() != read_entry.version_read:
+                     raise ConflictException(f"Read-set conflict on ref {ref_id}", frozenset([ref_id]))
             
-            # Apply changes
+            # 3. Apply changes
+            new_version = self.coordinator.create_version_stamp(self.id)
             for ref_id, write_entry in self.write_log.items():
                 ref = self.coordinator.get_ref(ref_id)
                 if ref:
@@ -1053,7 +1053,7 @@ class Ref(Generic[T]):
                     return val, v
             
             # If not found (shouldn't happen with proper retention)
-            raise HistoryExpiredException(f"Snapshot at time {version.logical_time} expired for ref {self.id}")
+            raise HistoryExpiredException(f"Snapshot at time {version.logical_time} expired for ref {self.id}", self.id)
 
     def _set_value(self, value: T, version: VersionStamp) -> None:
         # Run validators
@@ -1076,25 +1076,20 @@ class Ref(Generic[T]):
             if len(self._history) <= 1:
                 return
             
-            # Keep at least the latest version and anything newer than retention_bound
-            new_history = []
-            max_to_keep = TransactionCoordinator().history.compute_max_history(self.id)
-            
-            # Always keep the very latest
-            latest = self._history[-1]
-            
-            # Find items to keep
-            to_keep = []
-            for i in range(len(self._history) - 2, -1, -1):
-                v, val = self._history[i]
-                if v.logical_time >= retention_bound or len(to_keep) < max_to_keep:
-                    to_keep.append(self._history[i])
-                else:
+            # Find the largest version V such that V <= retention_bound.
+            # This version is the minimum necessary to satisfy reads at retention_bound.
+            base_idx = 0
+            for i in range(len(self._history) - 1, -1, -1):
+                if self._history[i][0].logical_time <= retention_bound:
+                    base_idx = i
                     break
             
-            to_keep.reverse()
-            to_keep.append(latest)
-            self._history = to_keep
+            # We must keep history from base_idx onwards.
+            # Also respect adaptive max_history bounds.
+            max_h = TransactionCoordinator().history.compute_max_history(self.id)
+            start_idx = max(base_idx, len(self._history) - max_h)
+            
+            self._history = self._history[start_idx:]
 
     def deref(self) -> T:
         tx = Transaction.get_current()
