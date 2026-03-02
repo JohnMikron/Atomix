@@ -1,5 +1,5 @@
 """
-Atomix v3.1.1 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.1.5 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -14,7 +14,7 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.1.1
+Version: 3.1.5
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """

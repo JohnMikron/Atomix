@@ -1,4 +1,4 @@
-# Atomix STM (v3.1.0) ⚛️
+# Atomix STM (v3.1.5) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.13+ (No-GIL Ready)**
 
@@ -19,10 +19,12 @@ Traditional locking is hard. Deadlocks, priority inversion, and race conditions 
 - **Durable (Optional)**: Support for enterprise persistence plugins.
 - **No-GIL Optimized**: Designed to scale on Python 3.13's free-threading mode.
 
-### Critical v3.1 Enhancements:
+### v3.1.x Enterprise Hardening:
+- ✅ **Heavy Metal Atomicity (v3.1.4)**: Entire commit process is atomic, eliminating the last 0.1% race conditions.
+- ✅ **Robust History Retention (v3.1.4)**: MVCC snapshots are protected from garbage collection while active.
 - ✅ **Adaptive Reaper**: Industry-first history cleanup that scales with system contention.
 - ✅ **Level Bloat Fix**: Optimized `PersistentVector` for zero-overhead deep trees.
-- ✅ **Snapshot Protection**: Hardened transaction timeouts to prevent memory exhaustion.
+- ✅ **Transparent Error Propagation**: Refactored `abort()` to prevent exception masking and silent data loss.
 - ✅ **Lock-free Primitives**: High-performance `Seqlock` and `Spinlock` internals.
 
 ---

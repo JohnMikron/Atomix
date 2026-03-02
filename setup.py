@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="atomix-stm",
-    version="3.1.4",
+    version="3.1.5",
     packages=find_packages(),
     install_requires=[],
     author="Atomix STM Maintainers",

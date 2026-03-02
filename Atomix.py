@@ -18,7 +18,7 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.1.4
+Version: 3.1.5
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
