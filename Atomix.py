@@ -18,7 +18,7 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.1.5
+Version: 3.1.6
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
@@ -1069,11 +1069,16 @@ class Transaction:
             # Read from ref
             value, version = ref._read_at_version(self.snapshot_version)
             
+            try:
+                val_hash = hash(value)
+            except TypeError:
+                val_hash = id(value)
+                
             # Record read
             self._read_log[ref_id] = ReadLogEntry(
                 ref_id=ref_id,
                 version_read=version,
-                value_hash=hash(repr(value))
+                value_hash=val_hash
             )
             
             self._coordinator.history.record_access(ref_id)

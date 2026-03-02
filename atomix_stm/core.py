@@ -1,5 +1,5 @@
 """
-Atomix v3.1.5 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.1.6 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -14,7 +14,7 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.1.5
+Version: 3.1.6
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
@@ -919,11 +919,16 @@ class Transaction:
         # MVCC read
         value, version = ref._get_value_at(self.snapshot_version)
         
+        try:
+            val_hash = hash(value)
+        except TypeError:
+            val_hash = id(value)
+            
         # Record in read log
         self.read_log[ref.id] = ReadLogEntry(
             ref_id=ref.id,
             version_read=version,
-            value_hash=hash(value) if hasattr(value, '__hash__') else id(value)
+            value_hash=val_hash
         )
         return value
 
@@ -1105,8 +1110,7 @@ class Ref(Generic[T]):
             tx.write(self, value)
         else:
             # Single-op transaction
-            with dosync():
-                write(self, value)
+            dosync(lambda: write(self, value))()
 
     def alter(self, fn: Callable[[T], T], *args, **kwargs) -> T:
         tx = Transaction.get_current()
@@ -1116,16 +1120,14 @@ class Ref(Generic[T]):
             tx.write(self, new_val)
             return new_val
         else:
-            with dosync():
-                return alter(self, fn, *args, **kwargs)
+            return dosync(lambda: alter(self, fn, *args, **kwargs))()
 
     def commute(self, fn: Callable[[T], T], *args, **kwargs) -> T:
         tx = Transaction.get_current()
         if tx:
             return tx.commute(self, fn, *args, **kwargs)
         else:
-            with dosync():
-                return commute(self, fn, *args, **kwargs)
+            return dosync(lambda: commute(self, fn, *args, **kwargs))()
 
     @property
     def value(self) -> T:
