@@ -25,6 +25,8 @@ License: GPLv3 / Commercial
 
 from __future__ import annotations
 
+__version__ = "3.2.0"
+
 import threading
 import time
 import random
@@ -1189,7 +1191,7 @@ class Transaction:
                 for ref_id, read_entry in self._read_log.items():
                     ref = self._coordinator.get_ref(ref_id)
                     if ref is None: 
-                        raise CommitException(f"Dangling reference detected: {ref_id}")
+                        continue  # Ref was legitimately garbage collected
                     if ref._get_version() != read_entry.version_read:
                          raise ConflictException(f"Read-set conflict on ref {ref_id}", conflicting_refs=frozenset([ref_id]))
 
@@ -1344,8 +1346,9 @@ class Ref(Generic[T]):
         json_encoder: Optional[Callable[[T], Any]] = None
     ):
         self._coordinator = TransactionCoordinator()
+        ref_id = self._coordinator.register_ref(self)
         self._identity = RefIdentity(
-            id=self._coordinator.new_ref_id(),
+            id=ref_id,
             created_at=time.time(),
             name=name
         )
@@ -1364,16 +1367,18 @@ class Ref(Generic[T]):
         if validator:
             self._validators.append(validator)
         
-        self._watchers: List[Callable[[T, T], None]] = []
+        self._watchers: Dict[str, Callable[[T, T], None]] = {}
         self._watcher_lock = threading.Lock()
         
         self._invariant: Optional[Callable[[T], bool]] = None
         self._access_time = time.time()
         
         self._json_encoder = json_encoder or (lambda x: x)
-        
-        self._coordinator.register_ref(self)
     
+    @property
+    def identity(self) -> RefIdentity:
+        return self._identity
+
     @property
     def id(self) -> int:
         return self._identity.id
@@ -1455,7 +1460,7 @@ class Ref(Generic[T]):
     def _notify_watchers(self, old_value: T, new_value: T) -> None:
         """Notify watchers."""
         with self._watcher_lock:
-            watchers = list(self._watchers)
+            watchers = list(self._watchers.values())
         
         for watcher in watchers:
             try:
@@ -1469,7 +1474,7 @@ class Ref(Generic[T]):
         """Read value in transaction."""
         tx = _get_current_transaction()
         if tx is None:
-            raise STMException("deref() requires active transaction")
+            return self._seqlock.read()
         return tx._read_ref(self)
     
     def read(self) -> T:
@@ -1480,7 +1485,11 @@ class Ref(Generic[T]):
         """Set value in transaction."""
         tx = _get_current_transaction()
         if tx is None:
-            raise STMException("set() requires active transaction")
+            @atomically
+            def _do_set():
+                self.set(value)
+            _do_set()
+            return
         tx._write_ref(self, value)
     
     def reset(self, value: T) -> T:
@@ -1490,22 +1499,34 @@ class Ref(Generic[T]):
         self._commit_value(value, version)
         return value
     
-    def alter(self, fn: Callable[[T], T], *args, **kwargs) -> None:
+    def alter(self, fn: Callable[[T], T], *args, **kwargs) -> T:
         """Apply function in transaction."""
         tx = _get_current_transaction()
         if tx is None:
-            raise STMException("alter() requires active transaction")
+            result = [None]
+            @atomically
+            def _do_alter():
+                result[0] = self.alter(fn, *args, **kwargs)
+            _do_alter()
+            return result[0]
         
         current = tx._read_ref(self)
         new_value = fn(current, *args, **kwargs)
         tx._write_ref(self, new_value)
+        return new_value
     
-    def commute(self, fn: Callable[[T], T], *args, **kwargs) -> None:
+    def commute(self, fn: Callable[[T], T], *args, **kwargs) -> T:
         """Commutative operation."""
         tx = _get_current_transaction()
         if tx is None:
-            raise STMException("commute() requires active transaction")
+            result = [None]
+            @atomically
+            def _do_commute():
+                result[0] = self.commute(fn, *args, **kwargs)
+            _do_commute()
+            return result[0]
         tx._commute_ref(self, fn, *args, **kwargs)
+        return None
     
     def add_validator(self, validator: Callable[[T], bool]) -> 'Ref[T]':
         """Add validator."""
@@ -1519,19 +1540,16 @@ class Ref(Generic[T]):
             self._validators = [validator]
         return self
     
-    def add_watcher(self, watcher: Callable[[T, T], None]) -> 'Ref[T]':
+    def add_watcher(self, key: str, watcher: Callable[[T, T], None]) -> 'Ref[T]':
         """Add watcher."""
         with self._watcher_lock:
-            self._watchers.append(watcher)
+            self._watchers[key] = watcher
         return self
     
-    def remove_watcher(self, watcher: Callable[[T, T], None]) -> None:
+    def remove_watcher(self, key: str) -> None:
         """Remove watcher."""
         with self._watcher_lock:
-            try:
-                self._watchers.remove(watcher)
-            except ValueError:
-                pass
+            self._watchers.pop(key, None)
     
     def set_invariant(self, invariant: Callable[[T], bool]) -> 'Ref[T]':
         """Set invariant."""
@@ -1560,6 +1578,14 @@ class Ref(Generic[T]):
         encoded = self._json_encoder(value)
         return json.dumps(encoded, default=str)
     
+    @property
+    def value(self) -> T:
+        return self.deref()
+
+    @value.setter
+    def value(self, val: T) -> None:
+        self.set(val)
+
     @classmethod
     def from_json(
         cls: Type['Ref[T]'], 
@@ -1606,7 +1632,7 @@ class Atom(Generic[T]):
     ):
         self._seqlock = SeqLock(value)
         self._validator = validator
-        self._watchers: List[Callable[[T, T], None]] = []
+        self._watchers: Dict[str, Callable[[T, T], None]] = {}
         self._watcher_lock = threading.Lock()
         self._json_encoder = json_encoder or (lambda x: x)
     
@@ -1633,29 +1659,33 @@ class Atom(Generic[T]):
             if self._validator and not self._validator(new_value):
                 raise ValidationException("Atom validation failed")
             
-            current = self._seqlock.read()
-            if current == old_value:
-                self._seqlock.write(new_value)
-                self._notify_watchers(old_value, new_value)
-                return new_value
+            with self._seqlock._write_lock:
+                if self._seqlock._value is old_value or self._seqlock._value == old_value:
+                    self._seqlock._sequence += 1
+                    self._seqlock._value = new_value
+                    self._seqlock._sequence += 1
+                    
+                    self._notify_watchers(old_value, new_value)
+                    return new_value
     
     def compare_and_set(self, expected: T, new_value: T) -> bool:
         """CAS operation."""
         if self._validator and not self._validator(new_value):
             raise ValidationException("Atom validation failed")
         
-        current = self._seqlock.read()
-        if current != expected:
+        with self._seqlock._write_lock:
+            if self._seqlock._value is expected or self._seqlock._value == expected:
+                self._seqlock._sequence += 1
+                self._seqlock._value = new_value
+                self._seqlock._sequence += 1
+                self._notify_watchers(expected, new_value)
+                return True
             return False
-        
-        self._seqlock.write(new_value)
-        self._notify_watchers(expected, new_value)
-        return True
     
     def _notify_watchers(self, old_value: T, new_value: T) -> None:
         """Notify watchers."""
         with self._watcher_lock:
-            watchers = list(self._watchers)
+            watchers = list(self._watchers.values())
         
         for watcher in watchers:
             try:
@@ -1663,11 +1693,16 @@ class Atom(Generic[T]):
             except Exception:
                 pass
     
-    def add_watcher(self, watcher: Callable[[T, T], None]) -> 'Atom[T]':
+    def add_watcher(self, key: str, watcher: Callable[[T, T], None]) -> 'Atom[T]':
         """Add watcher."""
         with self._watcher_lock:
-            self._watchers.append(watcher)
+            self._watchers[key] = watcher
         return self
+    
+    def remove_watcher(self, key: str) -> None:
+        """Remove watcher."""
+        with self._watcher_lock:
+            self._watchers.pop(key, None)
     
     def to_json(self) -> str:
         """Serialize to JSON."""
@@ -1710,6 +1745,11 @@ class PersistentVector(Generic[T]):
     BRANCH_FACTOR = 32
     BITS = 5
     MASK = 31
+    
+    @classmethod
+    def empty(cls) -> 'PersistentVector[T]':
+        """Create empty vector."""
+        return cls()
     
     def __init__(
         self,
@@ -2233,9 +2273,9 @@ class STMQueue(Generic[T]):
     Transactional queue with blocking semantics.
     """
     
-    def __init__(self, maxsize: int = 0):
+    def __init__(self, maxsize: int = 0, name: Optional[str] = None):
         self._maxsize = maxsize
-        self._items: Ref[List[T]] = Ref([], name="queue_items")
+        self._items: Ref[List[T]] = Ref([], name=name or "queue_items")
         self._closed = Atom(False)
     
     def put(self, item: T, timeout: Optional[float] = None) -> bool:
@@ -2263,30 +2303,30 @@ class STMQueue(Generic[T]):
                 time.sleep(0.001)
     
     def get(self, timeout: Optional[float] = None) -> Optional[T]:
-        """Get item from queue."""
+        """Get item from queue. Blocks until available or timeout."""
         deadline = time.time() + timeout if timeout else None
         
         while True:
-            try:
-                with transaction(timeout=timeout):
-                    items = self._items.deref()
-                    
-                    if not items:
-                        if self._closed.deref():
-                            return None
-                        if timeout and time.time() > deadline:
-                            return None
-                        retry()
-                    
-                    item = items[0]  # Fixed: Get first item
-                    self._items.set(items[1:])
-                    return item
-            except RetryException:
-                if self._closed.deref():
-                    return None
-                if deadline and time.time() > deadline:
-                    return None
-                time.sleep(0.001)
+            @atomically
+            def _do_get():
+                items = self._items.deref()
+                if not items:
+                    if self._closed.deref():
+                        return (True, None)  # Closed flag
+                    return (False, None)  # Retry flag
+                
+                item = items[0]
+                self._items.set(items[1:])
+                return (True, item)
+            
+            is_ready, result = _do_get()
+            if is_ready:
+                return result
+            
+            if deadline and time.time() > deadline:
+                raise TimeoutException(f"STMQueue.get() timed out after {timeout}s")
+            
+            time.sleep(0.01)
     
     def peek(self) -> Optional[T]:
         """Peek next item."""
@@ -2320,102 +2360,110 @@ class STMQueue(Generic[T]):
 
 class STMAgent(Generic[T]):
     """
-    Asynchronous agent for background processing.
+    Asynchronous agent for managing shared state.
+    Sends actions to a thread pool.
     """
     
+    if PYTHON_3_13_PLUS:
+        try:
+            _pool = asyncio.get_running_loop()
+        except RuntimeError:
+            _pool = None
+    else:
+        _pool = None
+    
     def __init__(self, initial_value: T, name: Optional[str] = None):
-        self._value = Atom(initial_value)
-        self._queue: STMQueue[Callable[[T], T]] = STMQueue()
-        self._name = name
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._run_loop,
-            name=name or "STM-Agent",
-            daemon=True
-        )
-        self._thread.start()
-    
-    def _run_loop(self) -> None:
-        """Background loop."""
-        while self._running:
-            action = self._queue.get(timeout=0.1)
-            if action is None:
-                continue
-            
+        self._ref = Ref(initial_value, name=name)
+        self._errors: List[Exception] = []
+        self._lock = threading.Lock()
+        self._pending = threading.Semaphore(0)
+        self._pending_count = 0
+        self._pending_count_lock = threading.Lock()
+
+    def send(self, fn: Callable[[T, Any], T], *args, **kwargs) -> None:
+        """Asynchronously apply function to agent state."""
+        with self._pending_count_lock:
+            self._pending_count += 1
+        
+        def task():
             try:
-                self._value.swap(action)
+                @atomically
+                def do_update():
+                    self._ref.alter(fn, *args, **kwargs)
+                do_update()
             except Exception as e:
-                logger.error(f"Agent error: {e}")
-    
-    def send(self, action: Callable[[T], T]) -> None:
-        """Send action."""
-        if self._running:
-            self._queue.put(action)
-    
+                with self._lock:
+                    self._errors.append(e)
+                logger.error(f"Agent {self._ref.identity.name} error: {e}")
+            finally:
+                with self._pending_count_lock:
+                    self._pending_count -= 1
+                self._pending.release()
+        
+        threading.Thread(target=task, daemon=True).start()
+
     def deref(self) -> T:
-        """Get current value."""
-        return self._value.deref()
-    
-    def shutdown(self, timeout: float = 5.0) -> None:
-        """Shutdown agent."""
-        self._running = False
-        self._queue.close()
-        self._thread.join(timeout)
-    
-    def __repr__(self) -> str:
-        return f"STMAgent(name={self._name!r}, value={self._value.deref()!r})"
+        return self._ref.deref()
+
+    @property
+    def value(self) -> T:
+        return self.deref()
+
+    @property
+    def errors(self) -> List[Exception]:
+        """Get list of errors from agent actions."""
+        with self._lock:
+            return list(self._errors)
+
+    def clear_errors(self) -> List[Exception]:
+        """Clear and return all errors."""
+        with self._lock:
+            errs = list(self._errors)
+            self._errors.clear()
+            return errs
+
+    def await_value(self, timeout: float = 10.0) -> T:
+        """Wait for all pending actions to complete."""
+        deadline = time.time() + timeout
+        while True:
+            with self._pending_count_lock:
+                if self._pending_count == 0:
+                    return self.deref()
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return self.deref()
+            self._pending.acquire(timeout=min(remaining, 0.1))
 
 
 class STMVar(Generic[T]):
     """
-    Transaction-local variable.
+    Dynamic variable with thread-local overrides.
     """
     
-    def __init__(self, name: Optional[str] = None):
-        self._name = name
-        self._tx_values: Dict[int, T] = {}
-        self._tx_set: Dict[int, bool] = {}
-        self._lock = threading.RLock()
-    
-    def set(self, value: T) -> None:
-        """Set value in transaction."""
-        tx = _get_current_transaction()
-        if tx is None:
-            raise STMException("STMVar.set() requires transaction")
-        
-        with self._lock:
-            self._tx_values[tx.id] = value
-            self._tx_set[tx.id] = True
-    
-    def get(self) -> T:
-        """Get value."""
-        tx = _get_current_transaction()
-        if tx is None:
-            raise STMException("STMVar.get() requires transaction")
-        
-        with self._lock:
-            if not self._tx_set.get(tx.id, False):
-                raise STMException(f"STMVar {self._name!r} not set")
-            return self._tx_values[tx.id]
-    
-    def is_set(self) -> bool:
-        """Check if set."""
-        tx = _get_current_transaction()
-        if tx is None:
-            return False
-        
-        with self._lock:
-            return self._tx_set.get(tx.id, False)
-    
-    def clear(self) -> None:
-        """Clear value."""
-        tx = _get_current_transaction()
-        if tx is None:
-            return
-        
-        with self._lock:
-            self._tx_values.pop(tx.id, None)
-            self._tx_set.pop(tx.id, None)
+    def __init__(self, initial_value: T, name: Optional[str] = None):
+        self._root_value = initial_value
+        self._local = threading.local()
+        self.name = name
+
+    def deref(self) -> T:
+        return getattr(self._local, 'value', self._root_value)
+
+    @contextmanager
+    def binding(self, value: T):
+        old = getattr(self._local, 'value', None)
+        has_old = hasattr(self._local, 'value')
+        self._local.value = value
+        try:
+            yield
+        finally:
+            if has_old:
+                self._local.value = old
+            else:
+                delattr(self._local, 'value')
+
+    @property
+    def value(self) -> T:
+        return self.deref()
 
 
 # ============================================================================
@@ -2437,88 +2485,106 @@ def _set_current_transaction(tx: Optional[Transaction]) -> None:
 
 @contextmanager
 def transaction(
-    timeout: float = 30.0,
-    max_retries: int = 500,
+    timeout: float = 10.0,
+    max_retries: int = 100,
     label: Optional[str] = None
 ) -> Iterator[Transaction]:
     """
-    Context manager for STM transaction.
-    
-    Example:
-        with transaction() as tx:
-            balance = account.deref()
-            account.set(balance + 100)
+    Single-attempt transaction context manager.
+    Does NOT handle automatic retries. Useful for fine-grained control or single ops.
     """
     coordinator = TransactionCoordinator()
-    tx = Transaction(
+    old_tx = _get_current_transaction()
+    
+    tx = old_tx or Transaction(
         coordinator,
         timeout=timeout,
         max_retries=max_retries,
         label=label
     )
-    
-    old_tx = _get_current_transaction()
     _set_current_transaction(tx)
+    if not old_tx:
+        coordinator.register_transaction(tx)
     
     try:
-        coordinator.register_transaction(tx)
-        
-        while True:
-            try:
-                with tx:
-                    yield tx
-                break
-                
-            except ConflictException as e:
-                tx._retry_count += 1
-                if tx._retry_count > tx._max_retries:
-                    raise TimeoutException(f"Max retries ({tx._max_retries}) exceeded")
-                    
-                backoff = coordinator.contention.get_backoff_for_retry(
-                    tx._retry_count,
-                    e.conflicting_refs or frozenset()
-                )
-                time.sleep(backoff)
-                tx._reset_for_retry()
-                
-            except RetryException as e:
-                backoff = coordinator.contention.get_backoff_for_retry(
-                    e.retry_count,
-                    frozenset()
-                )
-                time.sleep(backoff)
-                tx._reset_for_retry()
-                
+        with tx:
+            yield tx
     finally:
-        _set_current_transaction(old_tx)
-        coordinator.unregister_transaction(tx.id)
+        if not old_tx:
+            coordinator.unregister_transaction(tx.id)
+            _set_current_transaction(None)
 
 
 def dosync(
-    timeout: float = 30.0,
+    fn: Optional[Callable[..., R]] = None,
+    timeout: float = 10.0,
     max_retries: int = 500
-) -> Callable[[Callable[..., R]], Callable[..., R]]:
+) -> Union[R, Callable]:
     """
-    Decorator to run function in transaction.
+    Executes a function within an STM transaction with automatic retries.
+    Can be used as a function or a decorator.
     
-    Example:
+    Usage:
+        dosync(lambda: r.alter(lambda x: x + 5))
+        
         @dosync()
-        def transfer(from_acc, to_acc, amount):
-            from_acc.alter(lambda x: x - amount)
-            to_acc.alter(lambda x: x + amount)
+        def transfer(...):
+            ...
     """
-    def decorator(func: Callable[..., R]) -> Callable[..., R]:
+    def wrapper(func):
         @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> R:
-            with transaction(timeout=timeout, max_retries=max_retries):
+        def inner(*args, **kwargs):
+            coordinator = TransactionCoordinator()
+            retry_count = 0
+            
+            # Check if already in a transaction
+            existing_tx = _get_current_transaction()
+            if existing_tx:
                 return func(*args, **kwargs)
-        return wrapper
-    return decorator
+
+            tx = Transaction(coordinator, timeout=timeout, max_retries=max_retries)
+            
+            while True:
+                tx._retry_count = retry_count
+                _set_current_transaction(tx)
+                coordinator.register_transaction(tx)
+                try:
+                    with tx:
+                        result = func(*args, **kwargs)
+                    return result
+                except (RetryException, ConflictException) as e:
+                    retry_count += 1
+                    if retry_count > max_retries:
+                        raise CommitException(f"Max retries ({max_retries}) exceeded")
+                    
+                    # Backoff
+                    refs = set(tx._read_log.keys()) | set(tx._write_log.keys())
+                    if isinstance(e, ConflictException):
+                        refs |= e.conflicting_refs
+                    
+                    backoff = coordinator.contention.get_backoff_for_retry(retry_count, refs)
+                    time.sleep(backoff)
+                    tx._reset_for_retry()
+                except Exception:
+                    tx._abort()
+                    raise
+                finally:
+                    coordinator.unregister_transaction(tx.id)
+                    _set_current_transaction(None)
+        return inner
+
+    if fn is not None:
+        return wrapper(fn)()
+    return wrapper
 
 
-def atomically(func: Callable[..., R]) -> Callable[..., R]:
-    """Alias for @dosync()."""
-    return dosync()(func)
+def atomically(fn: Callable[..., R]) -> Callable[..., R]:
+    """Decorator to make a function run in an STM transaction with retries."""
+    return dosync(fn=None)(fn)
+
+def transactional(timeout: float = 10.0, max_retries: int = 500):
+    """Decorator with parameters for STM transactions."""
+    return dosync(fn=None, timeout=timeout, max_retries=max_retries)
 
 
 # ============================================================================
