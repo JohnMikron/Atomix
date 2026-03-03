@@ -1,5 +1,5 @@
 """
-Atomix v3.1.6 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.2.0 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -14,7 +14,7 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.1.6
+Version: 3.2.0
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
@@ -1110,7 +1110,10 @@ class Ref(Generic[T]):
             tx.write(self, value)
         else:
             # Single-op transaction
-            dosync(lambda: write(self, value))()
+            @atomically
+            def _do_set():
+                write(self, value)
+            _do_set()
 
     def alter(self, fn: Callable[[T], T], *args, **kwargs) -> T:
         tx = Transaction.get_current()
@@ -1120,14 +1123,24 @@ class Ref(Generic[T]):
             tx.write(self, new_val)
             return new_val
         else:
-            return dosync(lambda: alter(self, fn, *args, **kwargs))()
+            result = [None]
+            @atomically
+            def _do_alter():
+                result[0] = alter(self, fn, *args, **kwargs)
+            _do_alter()
+            return result[0]
 
     def commute(self, fn: Callable[[T], T], *args, **kwargs) -> T:
         tx = Transaction.get_current()
         if tx:
             return tx.commute(self, fn, *args, **kwargs)
         else:
-            return dosync(lambda: commute(self, fn, *args, **kwargs))()
+            result = [None]
+            @atomically
+            def _do_commute():
+                result[0] = commute(self, fn, *args, **kwargs)
+            _do_commute()
+            return result[0]
 
     @property
     def value(self) -> T:
@@ -1164,11 +1177,16 @@ class Atom(Generic[T]):
             old_val = self._seqlock.read()
             new_val = fn(old_val, *args, **kwargs)
             
-            # Locking write
+            # Locking write — inline SeqLock logic to avoid deadlock
             with self._seqlock._write_lock:
                 # Double-check
                 if self._seqlock._value is old_val or self._seqlock._value == old_val:
-                    self._seqlock.write(new_val)
+                    # Inline write to avoid nested lock acquisition (SeqLock.write
+                    # also acquires _write_lock, which is a non-reentrant Lock)
+                    self._seqlock._sequence += 1
+                    self._seqlock._value = new_val
+                    self._seqlock._sequence += 1
+                    
                     self._notify_watchers(old_val, new_val)
                     return new_val
                 # Else retry
@@ -1189,6 +1207,17 @@ class Atom(Generic[T]):
         for watcher in self._watchers.values():
             try: watcher(old_val, new_val)
             except Exception: pass
+
+    def compare_and_set(self, old_value: T, new_value: T) -> bool:
+        """Atomically set the value to new_value if the current value is old_value."""
+        with self._seqlock._write_lock:
+            if self._seqlock._value is old_value or self._seqlock._value == old_value:
+                self._seqlock._sequence += 1
+                self._seqlock._value = new_value
+                self._seqlock._sequence += 1
+                self._notify_watchers(old_value, new_value)
+                return True
+            return False
 
     @property
     def value(self) -> T:
@@ -1533,35 +1562,32 @@ class STMQueue(Generic[T]):
     def put(self, value: T) -> None:
         self._vector.alter(lambda v: v.conj(value))
 
-    def get(self) -> T:
-        while True:
-            v = self._vector.deref()
-            if len(v) > 0:
-                # Better pop front logic using internal slice
-                @atomically
-                def _do_get():
-                    vec = self._vector.deref()
-                    if len(vec) == 0: return None
-                    val = vec[0]
-                    # Refined pop-front logic: avoid full rebuild if possible
-                    if len(vec) == 1:
-                        self._vector.set(PersistentVector.empty())
-                    else:
-                        # Skip front: In a production PERSISTENT structure we'd use a real deque
-                        # For now we do a fast 'tail' copy
-                        new_vec = PersistentVector.empty()
-                        for i in range(1, len(vec)):
-                            new_vec = new_vec.conj(vec[i])
-                        self._vector.set(new_vec)
-                    return val
-                
-                result = _do_get()
-                if result is not None:
-                    return result
+    def get(self, timeout: float = 30.0) -> T:
+        """Get item from queue. Blocks until available or timeout."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            @atomically
+            def _do_get():
+                vec = self._vector.deref()
+                if len(vec) == 0:
+                    return None
+                val = vec[0]
+                if len(vec) == 1:
+                    self._vector.set(PersistentVector.empty())
+                else:
+                    new_vec = PersistentVector.empty()
+                    for i in range(1, len(vec)):
+                        new_vec = new_vec.conj(vec[i])
+                    self._vector.set(new_vec)
+                return val
             
-            # Sleep slightly before retry to yield and prevent high CPU on empty queues
+            result = _do_get()
+            if result is not None:
+                return result
+            
+            # Sleep briefly before polling again
             time.sleep(0.01)
-            retry()
+        raise TimeoutException(f"STMQueue.get() timed out after {timeout}s")
 
     def empty(self) -> bool:
         return len(self._vector.deref()) == 0
@@ -1588,17 +1614,29 @@ class STMAgent(Generic[T]):
         self._ref = Ref(initial_value, name=name)
         self._errors: List[Exception] = []
         self._lock = threading.Lock()
+        self._pending = threading.Semaphore(0)
+        self._pending_count = 0
+        self._pending_count_lock = threading.Lock()
 
     def send(self, fn: Callable[[T, Any], T], *args, **kwargs) -> None:
         """Asynchronously apply function to agent state."""
+        with self._pending_count_lock:
+            self._pending_count += 1
+        
         def task():
             try:
-                with dosync():
+                @atomically
+                def do_update():
                     self._ref.alter(fn, *args, **kwargs)
+                do_update()
             except Exception as e:
                 with self._lock:
                     self._errors.append(e)
                 logger.error(f"Agent {self._ref.identity.name} error: {e}")
+            finally:
+                with self._pending_count_lock:
+                    self._pending_count -= 1
+                self._pending.release()
         
         threading.Thread(target=task, daemon=True).start()
 
@@ -1609,11 +1647,30 @@ class STMAgent(Generic[T]):
     def value(self) -> T:
         return self.deref()
 
+    @property
+    def errors(self) -> List[Exception]:
+        """Get list of errors from agent actions."""
+        with self._lock:
+            return list(self._errors)
+
+    def clear_errors(self) -> List[Exception]:
+        """Clear and return all errors."""
+        with self._lock:
+            errs = list(self._errors)
+            self._errors.clear()
+            return errs
+
     def await_value(self, timeout: float = 10.0) -> T:
-        """Wait for actions to complete (simplified)."""
-        # In a real implementation, we'd track a task queue.
-        time.sleep(0.1) 
-        return self.deref()
+        """Wait for all pending actions to complete."""
+        deadline = time.time() + timeout
+        while True:
+            with self._pending_count_lock:
+                if self._pending_count == 0:
+                    return self.deref()
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return self.deref()
+            self._pending.acquire(timeout=min(remaining, 0.1))
 
 
 class STMVar(Generic[T]):
@@ -1739,7 +1796,7 @@ def atomically(fn: Callable[..., R]) -> Callable[..., R]:
     return dosync(fn=None)(fn)
 
 
-def transaction(timeout: float = 10.0, max_retries: int = 500):
+def transactional(timeout: float = 10.0, max_retries: int = 500):
     """Decorator with parameters for STM transactions."""
     def decorator(fn):
         return dosync(fn=None, timeout=timeout, max_retries=max_retries)(fn)

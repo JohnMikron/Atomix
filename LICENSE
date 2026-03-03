@@ -1,7 +1,7 @@
 # GNU GENERAL PUBLIC LICENSE
 Version 3, 29 June 2007
 
-Copyright (C) 2026 Atomix STM Project <maintainers@atomix-stm.org>
+Copyright (C) 2026 Atomix STM Project (https://github.com/JohnMikron/Atomix)
 
 Everyone is permitted to copy and distribute verbatim copies
 of this license document, but changing it is not allowed.
@@ -17,4 +17,4 @@ COMMERCIAL LICENSE ADDENDUM:
 This software is also available under a Commercial License for 
 enterprise use. Use of this software in closed-source projects 
 requires a valid Commercial License.
-Contact maintainers@atomix-stm.org for details.
+Contact the authors via https://github.com/JohnMikron/Atomix for details.

@@ -11,6 +11,7 @@ from .core import (
     dosync,
     atomically,
     transaction,
+    transactional,
     async_dosync,
     retry,
     alter,
@@ -22,14 +23,16 @@ from .core import (
     STMDiagnostics,
     STMException,
     RetryException,
+    CommitException,
     ConflictException,
+    TransactionAbortedException,
     TimeoutException,
     ValidationException,
     HistoryExpiredException,
     InvariantViolationException
 )
 
-__version__ = "3.1.6"
+__version__ = "3.2.0"
 __author__ = "Atomix STM Maintainers"
 __license__ = "GPLv3 / Commercial"
 
@@ -46,6 +49,7 @@ __all__ = [
     'dosync',
     'atomically',
     'transaction',
+    'transactional',
     'async_dosync',
     'retry',
     'alter',
@@ -57,7 +61,9 @@ __all__ = [
     'STMDiagnostics',
     'STMException',
     'RetryException',
+    'CommitException',
     'ConflictException',
+    'TransactionAbortedException',
     'TimeoutException',
     'ValidationException',
     'HistoryExpiredException',

@@ -57,20 +57,19 @@ class TestAtomixSTM(unittest.TestCase):
         q = STMQueue()
         res = []
         
-        @atomically
-        def consumer_logic():
-            val = q.get()
+        def consumer():
+            val = q.get(timeout=10.0)
             res.append(val)
                 
-        t = threading.Thread(target=consumer_logic)
+        t = threading.Thread(target=consumer)
         t.start()
         
-        time.sleep(0.1)
+        time.sleep(0.3)
         self.assertEqual(len(res), 0)  # Should be waiting
         
         dosync(lambda: q.put("hello"))
         
-        t.join()
+        t.join(timeout=10)
         self.assertEqual(res[0], "hello")
 
 
