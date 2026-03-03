@@ -1168,7 +1168,10 @@ class Atom(Generic[T]):
             with self._seqlock._write_lock:
                 # Double-check
                 if self._seqlock._value is old_val or self._seqlock._value == old_val:
-                    self._seqlock.write(new_val)
+                    # SeqLock.write already acquires the lock, so bypass it or do it manually
+                    self._seqlock._sequence += 1
+                    self._seqlock._value = new_val
+                    self._seqlock._sequence += 1
                     self._notify_watchers(old_val, new_val)
                     return new_val
                 # Else retry
@@ -1593,8 +1596,10 @@ class STMAgent(Generic[T]):
         """Asynchronously apply function to agent state."""
         def task():
             try:
-                with dosync():
+                @atomically
+                def do_update():
                     self._ref.alter(fn, *args, **kwargs)
+                do_update()
             except Exception as e:
                 with self._lock:
                     self._errors.append(e)
