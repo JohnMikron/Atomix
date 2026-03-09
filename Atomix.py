@@ -841,7 +841,7 @@ class TransactionCoordinator:
                 continue
             
             current_version = ref._get_version()
-            if current_version > read_version:
+            if current_version != read_version:
                 conflicting.add(ref_id)
         
         return frozenset(conflicting) if conflicting else None
@@ -1487,7 +1487,7 @@ class Ref(Generic[T]):
         if tx is None:
             @atomically
             def _do_set():
-                self.set(value)
+                _get_current_transaction()._write_ref(self, value)
             _do_set()
             return
         tx._write_ref(self, value)
@@ -1506,7 +1506,11 @@ class Ref(Generic[T]):
             result = [None]
             @atomically
             def _do_alter():
-                result[0] = self.alter(fn, *args, **kwargs)
+                tx = _get_current_transaction()
+                current = tx._read_ref(self)
+                new_value = fn(current, *args, **kwargs)
+                tx._write_ref(self, new_value)
+                result[0] = new_value
             _do_alter()
             return result[0]
         
@@ -1522,7 +1526,7 @@ class Ref(Generic[T]):
             result = [None]
             @atomically
             def _do_commute():
-                result[0] = self.commute(fn, *args, **kwargs)
+                _get_current_transaction()._commute_ref(self, fn, *args, **kwargs)
             _do_commute()
             return result[0]
         tx._commute_ref(self, fn, *args, **kwargs)
@@ -1653,14 +1657,21 @@ class Atom(Generic[T]):
     def swap(self, fn: Callable[[T], T], *args, **kwargs) -> T:
         """Atomic swap."""
         while True:
-            old_value = self._seqlock.read()
+            seq = self._seqlock._sequence
+            if seq & 1:
+                time.sleep(0.000001)
+                continue
+            old_value = self._seqlock._value
+            if self._seqlock._sequence != seq:
+                continue
+            
             new_value = fn(old_value, *args, **kwargs)
             
             if self._validator and not self._validator(new_value):
                 raise ValidationException("Atom validation failed")
             
             with self._seqlock._write_lock:
-                if self._seqlock._value is old_value or self._seqlock._value == old_value:
+                if self._seqlock._sequence == seq:
                     self._seqlock._sequence += 1
                     self._seqlock._value = new_value
                     self._seqlock._sequence += 1
@@ -2277,6 +2288,7 @@ class STMQueue(Generic[T]):
         self._maxsize = maxsize
         self._items: Ref[List[T]] = Ref([], name=name or "queue_items")
         self._closed = Atom(False)
+        self._cond = threading.Condition()
     
     def put(self, item: T, timeout: Optional[float] = None) -> bool:
         """Put item in queue."""
@@ -2286,21 +2298,32 @@ class STMQueue(Generic[T]):
         deadline = time.time() + timeout if timeout else None
         
         while True:
-            try:
-                with transaction(timeout=timeout):
-                    items = self._items.deref()
-                    
-                    if self._maxsize > 0 and len(items) >= self._maxsize:
-                        if timeout and time.time() > deadline:
-                            return False
-                        retry()
-                    
-                    self._items.set(items + [item])
-                    return True
-            except RetryException:
-                if deadline and time.time() > deadline:
+            @atomically
+            def _do_put():
+                items = self._items.deref()
+                if self._maxsize > 0 and len(items) >= self._maxsize:
+                    if timeout and time.time() > deadline:
+                        return False
+                    return False  # retry flag
+                self._items.set(items + [item])
+                return True
+                
+            is_success = _do_put()
+            if is_success:
+                with self._cond:
+                    self._cond.notify_all()
+                return True
+                
+            if deadline:
+                remaining = deadline - time.time()
+                if remaining <= 0:
                     return False
-                time.sleep(0.001)
+                wait_time = remaining
+            else:
+                wait_time = None
+                
+            with self._cond:
+                self._cond.wait(timeout=wait_time)
     
     def get(self, timeout: Optional[float] = None) -> Optional[T]:
         """Get item from queue. Blocks until available or timeout."""
@@ -2321,12 +2344,20 @@ class STMQueue(Generic[T]):
             
             is_ready, result = _do_get()
             if is_ready:
+                with self._cond:
+                    self._cond.notify_all()
                 return result
             
-            if deadline and time.time() > deadline:
-                raise TimeoutException(f"STMQueue.get() timed out after {timeout}s")
+            if deadline:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise TimeoutException(f"STMQueue.get() timed out after {timeout}s")
+                wait_time = remaining
+            else:
+                wait_time = None
             
-            time.sleep(0.01)
+            with self._cond:
+                self._cond.wait(timeout=wait_time)
     
     def peek(self) -> Optional[T]:
         """Peek next item."""
@@ -2376,10 +2407,10 @@ class STMAgent(Generic[T]):
         self._ref = Ref(initial_value, name=name)
         self._errors: List[Exception] = []
         self._lock = threading.Lock()
-        self._pending = threading.Semaphore(0)
-        self._pending_count = 0
         self._pending_count_lock = threading.Lock()
-
+        self._pending = threading.Condition(self._pending_count_lock)
+        self._pending_count = 0
+    
     def send(self, fn: Callable[[T, Any], T], *args, **kwargs) -> None:
         """Asynchronously apply function to agent state."""
         with self._pending_count_lock:
@@ -2398,7 +2429,8 @@ class STMAgent(Generic[T]):
             finally:
                 with self._pending_count_lock:
                     self._pending_count -= 1
-                self._pending.release()
+                    if self._pending_count == 0:
+                        self._pending.notify_all()
         
         threading.Thread(target=task, daemon=True).start()
 
@@ -2425,14 +2457,13 @@ class STMAgent(Generic[T]):
     def await_value(self, timeout: float = 10.0) -> T:
         """Wait for all pending actions to complete."""
         deadline = time.time() + timeout
-        while True:
-            with self._pending_count_lock:
-                if self._pending_count == 0:
-                    return self.deref()
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                return self.deref()
-            self._pending.acquire(timeout=min(remaining, 0.1))
+        with self._pending_count_lock:
+            while self._pending_count > 0:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                self._pending.wait(timeout=remaining)
+        return self.deref()
 
 
 class STMVar(Generic[T]):
