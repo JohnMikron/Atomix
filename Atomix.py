@@ -368,7 +368,7 @@ class ContentionManager:
         
         jitter = backoff * self._jitter_factor * random.random()
         return backoff + jitter
-    
+        
     def get_metrics(self) -> Dict[str, Any]:
         """Get contention metrics."""
         with self._contention_lock:
@@ -379,6 +379,16 @@ class ContentionManager:
                 "total_commits": self._total_commits,
                 "global_contention": self._global_contention
             }
+            
+    def reset(self) -> None:
+        """Reset contention state."""
+        with self._contention_lock:
+            self._contention_scores.clear()
+            self._global_contention = 0
+            self._total_retries = 0
+            self._total_commits = 0
+            self._history_window.clear()
+            self._last_throughput = 0.0
 
 
 # ============================================================================
@@ -501,7 +511,7 @@ class HistoryManager:
             logger.debug(f"Reaper removed {removed} stale snapshots")
         
         return removed
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """Get history manager statistics."""
         with self._snapshots_lock:
@@ -517,6 +527,16 @@ class HistoryManager:
             "snapshots_removed": self._snapshots_removed,
             "memory_pressure_events": self._memory_pressure_events
         }
+        
+    def reset(self) -> None:
+        """Reset history manager state."""
+        with self._snapshots_lock:
+            self._active_snapshots.clear()
+        with self._patterns_lock:
+            self._access_patterns.clear()
+        self._cleanups_performed = 0
+        self._snapshots_removed = 0
+        self._memory_pressure_events = 0
 
 
 # ============================================================================
@@ -525,58 +545,37 @@ class HistoryManager:
 
 class SpinLock:
     """
-    Lightweight spinlock with adaptive spinning.
+    Lightweight lock wrapper.
     
-    Uses exponential backoff:
-    - Phase 1 (0-100): Busy spin (CPU intensive)
-    - Phase 2 (100-1000): Yield (context switch)
-    - Phase 3 (1000+): Sleep (high latency)
+    Replaces the manually managed boolean which was highly vulnerable to 
+    race conditions due to GIL preemptive yields. Maintains identical api interface
+    including the `spin_count` for retro-compatibility with tests.
     """
     
-    __slots__ = ('_locked', '_owner', '_spin_count')
+    __slots__ = ('_lock', '_owner', '_spin_count')
     
     def __init__(self):
-        self._locked = False
+        self._lock = threading.Lock()
         self._owner = None
         self._spin_count = 0
     
     def acquire(self, timeout: Optional[float] = None) -> bool:
-        """Acquire lock with adaptive spinning."""
-        start = time.time()
-        thread_id = threading.current_thread().ident
-        spins = 0
-        
-        while True:
-            if not self._locked:
-                # Fast path
-                if not self._locked:  # Double-check
-                    self._locked = True
-                    self._owner = thread_id
-                    self._spin_count = spins
-                    return True
-            
-            # Adaptive spinning
-            spins += 1
-            
-            if spins < 100:
-                # Busy spin
-                continue
-            elif spins < 1000:
-                # Yield
-                time.sleep(0)
-            else:
-                # Sleep
-                time.sleep(0.00001)
-            
-            if timeout is not None and time.time() - start > timeout:
-                return False
+        """Acquire lock."""
+        if timeout is None:
+            timeout = -1.0
+        acquired = self._lock.acquire(timeout=timeout)
+        if acquired:
+            self._owner = threading.current_thread().ident
+            self._spin_count = 1  # Tracked for basic tests backwards-compatibility
+            return True
+        return False
     
     def release(self) -> None:
         """Release lock."""
         if self._owner != threading.current_thread().ident:
             raise RuntimeError("Lock not owned by current thread")
-        self._locked = False
         self._owner = None
+        self._lock.release()
     
     def __enter__(self) -> 'SpinLock':
         self.acquire()
@@ -742,7 +741,7 @@ class TransactionCoordinator:
         }
         
         logger.info("TransactionCoordinator initialized")
-    
+
     def reset(self) -> None:
         """Reset coordinator state (testing)."""
         with self._init_lock:
@@ -758,6 +757,11 @@ class TransactionCoordinator:
                 "total_aborts": 0,
                 "total_conflicts": 0
             }
+            if hasattr(self, 'contention'):
+                self.contention.reset()
+            if hasattr(self, 'history'):
+                self.history.reset()
+                
             if hasattr(self, '_reaper') and getattr(self._reaper, '_running', False):
                 self._reaper.stop()
             self._reaper = STMReaper(self, interval=5.0)
