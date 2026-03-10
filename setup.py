@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="atomix-stm",
-    version="3.2.3",
+    version="3.2.5",
     packages=find_packages(),
     install_requires=[],
     author="Atomix STM Maintainers",
@@ -11,6 +11,11 @@ setup(
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/JohnMikron/Atomix",
+    project_urls={
+        "Homepage": "https://github.com/JohnMikron/Atomix",
+        "Source": "https://github.com/JohnMikron/Atomix",
+        "Bug Tracker": "https://github.com/JohnMikron/Atomix/issues",
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.13",

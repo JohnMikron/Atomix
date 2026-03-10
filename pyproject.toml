@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atomix-stm"
-version = "3.2.3"
+version = "3.2.5"
 authors = [
   { name="Atomix STM Maintainers", email="maintainers@atomix-stm.org" },
 ]
@@ -23,6 +23,7 @@ dependencies = []
 
 [project.urls]
 "Homepage" = "https://github.com/JohnMikron/Atomix"
+"Source" = "https://github.com/JohnMikron/Atomix"
 "Bug Tracker" = "https://github.com/JohnMikron/Atomix/issues"
 
 [tool.setuptools.packages.find]

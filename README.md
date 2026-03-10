@@ -1,4 +1,4 @@
-# Atomix STM (v3.2.3) ⚛️
+# Atomix STM (v3.2.5) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.9+ (No-GIL Ready)**
 
@@ -140,7 +140,18 @@ print(val)  # "hello"
 
 ## 🆕 Changelog
 
-### v3.2.3 (Current Version)
+### v3.2.5 (Current Version)
+- Fixed relative markdown links inside PyPI release details so internal documents are clickable.
+- Added absolute GitHub repositories inside package metadata configurations.
+
+### v3.2.4 (2026-03-10)
+- Fixed module-level `commute()` missing return mappings.
+- Re-routed unexpected `TransactionAbortedException` skips.
+- Nested transaction `@atomically` behaviors stabilized.
+- Optimized thread management under the `STMAgent` framework using global `ThreadPoolExecutors`.
+- Removed redundant history checks and context wrappers.
+
+### v3.2.3 (2026-03-10)
 - Removed duplicate namespace definitions for `retry` and `commute`.
 - Fixed `dosync` re-registration logic so that snapshot correctly updates over retries.
 - Replaced `transaction()` wrappers with strict `@atomically` scopes across queue queries.
@@ -180,18 +191,18 @@ Atomix STM is dual-licensed:
 1. **GPLv3**: Open-source use (requires sharing your source code).
 2. **Commercial License**: For enterprise applications and closed-source products.
 
-See [LICENSE](LICENSE) for details.
+See [LICENSE](https://github.com/JohnMikron/Atomix/blob/main/LICENSE) for details.
 
 ---
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
+We welcome contributions! Please see our [Contributing Guide](https://github.com/JohnMikron/Atomix/blob/main/CONTRIBUTING.md) for details on:
 - Dev setup
 - Testing
 - PR process and style guide
 
-Please also review our [Code of Conduct](CODE_OF_CONDUCT.md) and [Security Policy](SECURITY.md).
+Please also review our [Code of Conduct](https://github.com/JohnMikron/Atomix/blob/main/CODE_OF_CONDUCT.md) and [Security Policy](https://github.com/JohnMikron/Atomix/blob/main/SECURITY.md).
 
 ---
 

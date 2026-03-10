@@ -1,5 +1,5 @@
 """
-Atomix v3.2.3 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.2.5 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -18,14 +18,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.2.3
+Version: 3.2.5
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "3.2.3"
+__version__ = "3.2.5"
 
 import threading
 import time
@@ -759,7 +759,6 @@ class TransactionCoordinator:
                 "total_aborts": 0,
                 "total_conflicts": 0
             }
-            self._refs.clear()
             self._contention_manager.reset()
             self._history_manager.reset()
                 
@@ -1514,10 +1513,7 @@ class Ref(Generic[T]):
         """Set value in transaction."""
         tx = _get_current_transaction()
         if tx is None:
-            @atomically
-            def _do_set():
-                _get_current_transaction()._write_ref(self, value)
-            _do_set()
+            self.alter(lambda _: value)
             return
         tx._write_ref(self, value)
     
@@ -2309,10 +2305,10 @@ class STMAgent(Generic[T]):
             self._pending_count += 1
         
         def task():
+            @atomically
+            def do_update():
+                self._ref.alter(fn, *args, **kwargs)
             try:
-                @atomically
-                def do_update():
-                    self._ref.alter(fn, *args, **kwargs)
                 do_update()
             except Exception as e:
                 with self._lock:
@@ -2324,7 +2320,14 @@ class STMAgent(Generic[T]):
                     if self._pending_count == 0:
                         self._pending.notify_all()
         
-        threading.Thread(target=task, daemon=True).start()
+        if not hasattr(STMAgent, '_agent_pool'):
+            import concurrent.futures
+            import os
+            STMAgent._agent_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=os.cpu_count() or 4,
+                thread_name_prefix="STMAgent"
+            )
+        STMAgent._agent_pool.submit(task)
 
     def deref(self) -> T:
         return self._ref.deref()
@@ -2476,6 +2479,10 @@ def dosync(
                         with tx:
                             result = func(*args, **kwargs)
                         return result
+                    except TransactionAbortedException:
+                        coordinator.unregister_transaction(tx.id)
+                        _set_current_transaction(None)
+                        raise
                     except (RetryException, ConflictException) as e:
                         retry_count += 1
                         if retry_count > max_retries:
@@ -2569,12 +2576,12 @@ def ensure(ref: Ref[T]) -> T:
     return tx._read_ref(ref)
 
 
-def commute(ref: Ref[T], fn: Callable[[T], T], *args, **kwargs) -> None:
+def commute(ref: Ref[T], fn: Callable[[T], T], *args, **kwargs) -> T:
     """Apply commutative function."""
     tx = _get_current_transaction()
     if tx is None:
         raise STMException("commute() requires active transaction")
-    tx._commute_ref(ref, fn, *args, **kwargs)
+    return tx._commute_ref(ref, fn, *args, **kwargs)
 
 
 def io(func: Callable[..., R]) -> Callable[..., R]:
@@ -2823,13 +2830,15 @@ if __name__ == '__main__':
     alice = Ref(1000.0, name="alice")
     bob = Ref(500.0, name="bob")
     
+    @atomically
     def transfer(amount: float):
-        with transaction():
-            if alice.deref() >= amount:
-                alice.set(alice.deref() - amount)
-                bob.set(bob.deref() + amount)
-    
-    run_concurrent([lambda: transfer(100.0)] * 5)
+        if alice.deref() >= amount:
+            alice.set(alice.deref() - amount)
+            bob.set(bob.deref() + amount)
+                
+    @atomically
+    def deposit(amount: float):
+        alice.alter(lambda x: x + amount)
     
     with transaction():
         print(f"Alice: ${alice.deref():.2f}")

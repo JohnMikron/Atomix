@@ -1,0 +1,77 @@
+test_agent_clear_errors (test_deep_evaluation.TestBug1_STMAgentSend)
+clear_errors should return and clear accumulated errors. ... ok
+test_agent_send_basic (test_deep_evaluation.TestBug1_STMAgentSend)
+Agent should successfully apply a function to its state. ... ok
+test_agent_send_multiple (test_deep_evaluation.TestBug1_STMAgentSend)
+Multiple sends should all be applied. ... ok
+test_agent_send_no_errors (test_deep_evaluation.TestBug1_STMAgentSend)
+Successful sends should not produce errors. ... ok
+test_agent_send_with_error (test_deep_evaluation.TestBug1_STMAgentSend)
+Agent should capture errors from failed actions. ... ok
+test_cas_concurrent_only_one_wins (test_deep_evaluation.TestBug2_AtomCompareAndSet)
+Under contention, exactly one CAS should succeed per round. ... ok
+test_cas_failure (test_deep_evaluation.TestBug2_AtomCompareAndSet) ... ok
+test_cas_success (test_deep_evaluation.TestBug2_AtomCompareAndSet) ... ok
+test_atom_reset (test_deep_evaluation.TestBug2_AtomSwapDeadlock)
+Atom.reset() should still work correctly. ... ok
+test_atom_swap_basic (test_deep_evaluation.TestBug2_AtomSwapDeadlock)
+Atom.swap() should complete without deadlock. ... ok
+test_atom_swap_concurrent (test_deep_evaluation.TestBug2_AtomSwapDeadlock)
+Multiple threads swapping should produce correct final result. ... ok
+test_atom_swap_watcher_notification (test_deep_evaluation.TestBug2_AtomSwapDeadlock)
+Watchers should be notified during swap. ... ok
+test_atom_swap_with_timeout (test_deep_evaluation.TestBug2_AtomSwapDeadlock)
+Atom.swap() should not hang — verified with a timeout. ... ok
+test_transaction_context_manager_still_works (test_deep_evaluation.TestBug3_TransactionNameCollision)
+The context manager `transaction()` should still be available. ... ok
+test_transactional_decorator_works (test_deep_evaluation.TestBug3_TransactionNameCollision)
+The renamed transactional() decorator should work. ... ok
+test_transactional_with_contention (test_deep_evaluation.TestBug3_TransactionNameCollision)
+transactional decorator should handle retries under contention. ... ok
+test_queue_fifo_order (test_deep_evaluation.TestBug4_STMQueueRetry)
+Items should come out in FIFO order. ... ok
+test_queue_get_blocks_then_returns (test_deep_evaluation.TestBug4_STMQueueRetry)
+get() should block and then return when item becomes available. ... ok
+test_queue_get_timeout (test_deep_evaluation.TestBug4_STMQueueRetry)
+get() should raise TimeoutException when empty and times out. ... ok
+test_queue_put_get (test_deep_evaluation.TestBug4_STMQueueRetry)
+Basic put/get should work. ... ok
+test_ref_alter_outside_transaction (test_deep_evaluation.TestBug5_RefSetDoubleCall)
+Ref.alter() outside a transaction should still work. ... ok
+test_ref_set_inside_transaction (test_deep_evaluation.TestBug5_RefSetDoubleCall)
+Ref.set() inside a transaction should work correctly. ... ok
+test_ref_set_outside_transaction (test_deep_evaluation.TestBug5_RefSetDoubleCall)
+Ref.set() outside a transaction should work correctly. ... ok
+test_ref_value_setter (test_deep_evaluation.TestBug5_RefSetDoubleCall)
+Ref.value = X should also work (calls set() internally). ... ok
+test_agent_await_value_waits (test_deep_evaluation.TestSTMAgentImproved)
+await_value should actually wait for pending actions to complete. ... ok
+test_agent_concurrent_sends (test_deep_evaluation.TestSTMAgentImproved)
+Multiple concurrent sends should all be applied correctly. ... ok
+test_stmvar_basic (test_deep_evaluation.TestSTMVarBinding) ... ok
+test_stmvar_binding (test_deep_evaluation.TestSTMVarBinding) ... ok
+test_stmvar_thread_local (test_deep_evaluation.TestSTMVarBinding) ... ok
+test_version (test_deep_evaluation.TestVersionCheck) ... ok
+test_basic_transaction (test_stm.TestAtomixSTM) ... ok
+test_conflict_resolution (test_stm.TestAtomixSTM) ... ok
+test_persistent_vector_bloat_fix (test_stm.TestAtomixSTM) ... ok
+test_queue_retry (test_stm.TestAtomixSTM) ... ok
+test_aba_prevention (test_stm_advanced.TestSTMAvanced)
+Verify that ABA-style changes during a transaction cause a retry. ... ok
+test_high_contention_stress (test_stm_advanced.TestSTMAvanced)
+Stress test with 20 threads hitting a single Ref. ... ok
+test_nested_transactions (test_stm_advanced.TestSTMAvanced)
+Verify that nested transactions flatten correctly. ... ok
+test_transaction_idempotency_on_retry (test_stm_advanced.TestSTMAvanced)
+Ensure side effects inside transactions don't double-apply on conflict. ... ok
+
+----------------------------------------------------------------------
+Ran 38 tests in 4.233s
+
+OK
+
+
+TOTAL_ERRORS=0
+TOTAL_FAILURES=0
+TOTAL_RUN=38
+SUCCESS=True
