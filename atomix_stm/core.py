@@ -13,14 +13,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.2.7
+Version: 3.2.8
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "3.2.7"
+__version__ = "3.2.8"
 
 import threading
 import time
@@ -1187,6 +1187,7 @@ class Transaction:
             self._state = TransactionState.COMMITTING
         
         try:
+            notifications = []
             # Atomic commit block
             with self._coordinator._commit_lock:
                 # 1. Prepare
@@ -1203,8 +1204,13 @@ class Transaction:
                 for ref_id, entry in self._write_log.items():
                     ref = self._coordinator.get_ref(ref_id)
                     if ref is not None:
-                        ref._commit_value(entry.new_value, commit_version)
+                        notif_fn = ref._commit_value(entry.new_value, commit_version)
+                        notifications.append(notif_fn)
             
+            # Post-commit: Execute watcher notifications outside locks
+            for notif in notifications:
+                notif()
+                
             self._state = TransactionState.COMMITTED
             
             # Record success
@@ -1431,7 +1437,7 @@ class Ref(Generic[T]):
             self._trim_history(retention_bound)
         
         self._seqlock.write(value)
-        self._notify_watchers(old_value, value)
+        return lambda: self._notify_watchers(old_value, value)
     
     def _trim_history(self, retention_logical_time: int) -> None:
         """Trim history while preserving necessary base version."""
@@ -1470,6 +1476,12 @@ class Ref(Generic[T]):
                 watcher(old_value, new_value)
             except Exception:
                 pass
+
+
+    def _get_watchers(self) -> list[Callable[[T, T], None]]:
+        """Return list of watchers to be notified."""
+        with self._watcher_lock:
+            return list(self._watchers.values())
     
     # Public API
     
@@ -1678,6 +1690,7 @@ class Atom(Generic[T]):
                 retries += 1
                 if retries > 1000:
                     raise STMException("Max retries exceeded in Atom.swap")
+                time.sleep(min(0.001, 0.000001 * (2 ** (retries // 10)) + random.random() * 0.000001))
                 continue
             
             new_value = fn(old_value, *args, **kwargs)
@@ -2469,7 +2482,11 @@ def dosync(
             existing_tx = _get_current_transaction()
             if existing_tx:
                 existing_tx._check_active()
-                return func(*args, **kwargs)
+                try:
+                    _set_current_transaction(existing_tx)
+                    return func(*args, **kwargs)
+                finally:
+                    _set_current_transaction(existing_tx)
 
             tx = Transaction(coordinator, timeout=timeout, max_retries=max_retries)
             coordinator.register_transaction(tx)
