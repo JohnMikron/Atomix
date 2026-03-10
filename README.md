@@ -1,4 +1,4 @@
-# Atomix STM (v3.2.0) ⚛️
+# Atomix STM (v3.2.2) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.9+ (No-GIL Ready)**
 
@@ -139,6 +139,13 @@ print(val)  # "hello"
 ---
 
 ## 🆕 Changelog
+
+### v3.2.2 (Current Version)
+- Fixed missing parameter mappings (`alter`, `commute`, `atom`, `ref`, etc.) to top level.
+- Replaced custom logic with resilient `threading.RLock()` for the `RWLock`.
+- Fixed missing sentinels exceptions in `STMQueue`.
+- Fixed multiple ABA transaction resets that were looping unnecessarily.
+- Fixed properties bindings and missing imports from modular components.
 
 ### v3.2.0 (2026-03-03) — Deep Bug Fix Release
 
