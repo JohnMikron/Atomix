@@ -347,7 +347,7 @@ class TestVersionCheck(unittest.TestCase):
     def test_version(self):
         """Test version string."""
         import atomix_stm
-        self.assertEqual(atomix_stm.__version__, "3.2.9")
+        self.assertEqual(atomix_stm.__version__, "3.3.0")
 
 
 if __name__ == '__main__':

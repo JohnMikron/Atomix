@@ -1,5 +1,5 @@
 """
-Atomix v3.2.7 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.3.0 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -13,25 +13,21 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.2.9
+Version: 3.3.0
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "3.2.9"
+__version__ = "3.3.0"
 
 import threading
 import time
 import random
 import functools
-import weakref
 import sys
 import os
-import hashlib
-import struct
-import heapq
 import itertools
 import atexit
 import logging
@@ -39,18 +35,14 @@ import json
 from typing import (
     TypeVar, Generic, Callable, Optional, Any,
     List, Dict, Set, Tuple, Type, Union,
-    Protocol, runtime_checkable, overload,
-    ContextManager, Iterator, Iterable,
-    MutableMapping, Sequence, FrozenSet,
-    Coroutine, AsyncIterator, cast
+    Protocol, runtime_checkable,
+    Iterator, Iterable, FrozenSet,
+    AsyncIterator
 )
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from contextlib import contextmanager, asynccontextmanager
-from abc import ABC, abstractmethod
 from collections import defaultdict
-import copy
-import math
 import asyncio
 from pathlib import Path
 
@@ -60,7 +52,11 @@ from pathlib import Path
 
 PY_VERSION = sys.version_info
 PYTHON_3_13_PLUS = PY_VERSION >= (3, 13)
-NO_GIL_ENABLED = PYTHON_3_13_PLUS  # Assume No-GIL in 3.13+
+
+try:
+    NO_GIL_ENABLED = not sys._is_gil_enabled()
+except AttributeError:
+    NO_GIL_ENABLED = os.getenv("PYTHON_GIL") == "0"
 
 # ============================================================================
 # Logging Setup
@@ -1161,7 +1157,6 @@ class Transaction:
     
     def _prepare_inside_lock(self) -> Tuple[bool, Optional[FrozenSet[int]]]:
         """Prepare phase (assuming lock is held)."""
-        self._state = TransactionState.PREPARING
         read_set = {rid: entry.version_read for rid, entry in self._read_log.items()}
         write_set = set(self._write_log.keys()) | set(self._commutes.keys())
         conflicts = self._coordinator.detect_conflicts(self, read_set, write_set)
@@ -1188,7 +1183,7 @@ class Transaction:
                 self._coordinator.record_abort()
                 raise TimeoutException("Transaction timeout during commit")
             
-            self._state = TransactionState.COMMITTING
+            self._state = TransactionState.PREPARING
         
         try:
             notifications = []
@@ -1200,6 +1195,9 @@ class Transaction:
                 if not success and conflicts:
                     self._coordinator.contention.record_conflict(conflicts, self._retry_count)  # type: ignore
                     raise ConflictException(f"Transaction conflicted on refs {conflicts}", conflicting_refs=conflicts)
+                
+                self._state = TransactionState.COMMITTING
+                
                 # 2. Apply commutes
                 self._apply_commutes()
                 
@@ -1212,11 +1210,11 @@ class Transaction:
                         notifications.append(notif_fn)
             
             # Post-commit: Execute watcher notifications outside locks
+            self._state = TransactionState.COMMITTED
+            
             for notif in notifications:
                 notif()  # type: ignore
                 
-            self._state = TransactionState.COMMITTED
-            
             # Record success
             all_refs = set(self._write_log.keys()) | set(self._read_log.keys())
             self._coordinator.contention.record_success(all_refs)
@@ -1239,7 +1237,8 @@ class Transaction:
             if ref is None:
                 continue
             
-            value = ref._read_raw()
+            old_value = ref._read_raw()
+            value = old_value
             for commute in commutes:
                 value = commute.function(value, *commute.args, **commute.kwargs)
             
@@ -1247,7 +1246,7 @@ class Transaction:
             
             self._write_log[ref_id] = WriteLogEntry(
                 ref_id=ref_id,
-                old_value=ref._read_raw(),
+                old_value=old_value,
                 new_value=value,
                 old_version=ref._get_version(),
                 is_commutative=True
@@ -1426,7 +1425,7 @@ class Ref(Generic[T]):
                 self._identity.id
             )
     
-    def _commit_value(self, value: T, version: VersionStamp) -> None:
+    def _commit_value(self, value: T, version: VersionStamp) -> Callable[[], None]:
         """Commit new value."""
         old_value = self._value
         
@@ -1558,7 +1557,10 @@ class Ref(Generic[T]):
             result = [None]
             @atomically
             def _do_commute():
-                result[0] = _get_current_transaction()._commute_ref(self, fn, *args, **kwargs)  # type: ignore
+                inner_tx = _get_current_transaction()
+                if inner_tx is None:
+                    raise STMException("Failed to establish transaction context")
+                result[0] = inner_tx._commute_ref(self, fn, *args, **kwargs)  # type: ignore
             _do_commute()
             return result[0]  # type: ignore
         return tx._commute_ref(self, fn, *args, **kwargs)
@@ -2377,7 +2379,7 @@ class STMAgent(Generic[T]):
                 if remaining <= 0:
                     break
                 self._pending.wait(timeout=remaining)
-            return self.deref()
+        return self.deref()
 
 
 class STMVar(Generic[T]):
@@ -2457,7 +2459,7 @@ def transaction(
     finally:
         if not old_tx:
             coordinator.unregister_transaction(tx.id)
-            _set_current_transaction(None)
+            _set_current_transaction(old_tx)
 
 
 def dosync(
@@ -2482,8 +2484,6 @@ def dosync(
             coordinator = TransactionCoordinator()
             retry_count = 0
             
-            old_tx = _get_current_transaction()
-            
             # Check if already in a transaction
             existing_tx = _get_current_transaction()
             if existing_tx:
@@ -2502,12 +2502,12 @@ def dosync(
                         return result
                     except TransactionAbortedException:
                         coordinator.unregister_transaction(tx.id)
-                        _set_current_transaction(old_tx)
+                        _set_current_transaction(None)
                         raise
                     except (RetryException, ConflictException) as e:
                         retry_count += 1
-                        if retry_count > max_retries:
-                            raise CommitException(f"Max retries ({max_retries}) exceeded")
+                        if retry_count > tx._max_retries:
+                            raise CommitException(f"Max retries ({tx._max_retries}) exceeded")
                         
                         # Backoff
                         refs = set(tx._read_log.keys()) | set(tx._write_log.keys())
@@ -2525,7 +2525,7 @@ def dosync(
             finally:
                 if _get_current_transaction() is tx:
                     coordinator.unregister_transaction(tx.id)
-                _set_current_transaction(old_tx)
+                _set_current_transaction(None)
         return inner
 
     if fn is not None:
