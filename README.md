@@ -1,4 +1,4 @@
-# Atomix STM (v3.2.2) ⚛️
+# Atomix STM (v3.2.3) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.9+ (No-GIL Ready)**
 
@@ -140,7 +140,13 @@ print(val)  # "hello"
 
 ## 🆕 Changelog
 
-### v3.2.2 (Current Version)
+### v3.2.3 (Current Version)
+- Removed duplicate namespace definitions for `retry` and `commute`.
+- Fixed `dosync` re-registration logic so that snapshot correctly updates over retries.
+- Replaced `transaction()` wrappers with strict `@atomically` scopes across queue queries.
+- Cleaned up obsolete checks and explicit imports.
+
+### v3.2.2 (2026-03-10)
 - Fixed missing parameter mappings (`alter`, `commute`, `atom`, `ref`, etc.) to top level.
 - Replaced custom logic with resilient `threading.RLock()` for the `RWLock`.
 - Fixed missing sentinels exceptions in `STMQueue`.

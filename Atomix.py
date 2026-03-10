@@ -1,5 +1,5 @@
 """
-Atomix v3.2.2 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.2.3 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -18,14 +18,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.2.2
+Version: 3.2.3
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "3.2.2"
+__version__ = "3.2.3"
 
 import threading
 import time
@@ -574,8 +574,8 @@ class SpinLock:
         """Release lock."""
         if self._owner != threading.current_thread().ident:
             raise RuntimeError("Lock not owned by current thread")
-        self._owner = None
         self._lock.release()
+        self._owner = None
     
     def __enter__(self) -> 'SpinLock':
         self.acquire()
@@ -759,10 +759,9 @@ class TransactionCoordinator:
                 "total_aborts": 0,
                 "total_conflicts": 0
             }
-            if hasattr(self, 'contention'):
-                self.contention.reset()
-            if hasattr(self, 'history'):
-                self.history.reset()
+            self._refs.clear()
+            self._contention_manager.reset()
+            self._history_manager.reset()
                 
             if hasattr(self, '_reaper') and getattr(self._reaper, '_running', False):
                 self._reaper.stop()
@@ -1126,7 +1125,7 @@ class Transaction:
         fn: Callable[[T], T],
         *args,
         **kwargs
-    ) -> None:
+    ) -> T: # Changed return type to T
         """Register commutative operation."""
         with self._lock:
             self._check_active()
@@ -1145,6 +1144,7 @@ class Transaction:
                     is_commutative=True,
                     commutative_fn=fn
                 )
+                return new_value # Return new value for immediate feedback
             else:
                 # Defer to commit time
                 self._commutes[ref_id].append(CommuteEntry(
@@ -1153,6 +1153,10 @@ class Transaction:
                     args=args,
                     kwargs=kwargs
                 ))
+                # For deferred commutes, we can't return the final value yet.
+                # Return the current value as a best effort, or raise an error if strictness is needed.
+                # For now, let's return the current value from the ref.
+                return ref.deref() # Return current value for immediate feedback
     
     def _prepare_inside_lock(self) -> Tuple[bool, Optional[FrozenSet[int]]]:
         """Prepare phase (assuming lock is held)."""
@@ -1545,16 +1549,19 @@ class Ref(Generic[T]):
         return new_value
     
     def commute(self, fn: Callable[[T], T], *args, **kwargs) -> T:
-        """Commutative operation."""
+        """
+        Commutative operation.
+        Returns the new value if called inside a transaction, or the current value if outside.
+        """
         tx = _get_current_transaction()
         if tx is None:
+            result = [None]
             @atomically
             def _do_commute():
-                _get_current_transaction()._commute_ref(self, fn, *args, **kwargs)
+                result[0] = _get_current_transaction()._commute_ref(self, fn, *args, **kwargs)
             _do_commute()
-            return self.deref()
-        tx._commute_ref(self, fn, *args, **kwargs)
-        return None
+            return result[0]
+        return tx._commute_ref(self, fn, *args, **kwargs)
     
     def add_validator(self, validator: Callable[[T], bool]) -> 'Ref[T]':
         """Add validator."""
@@ -2242,15 +2249,23 @@ class STMQueue(Generic[T]):
                 self._cond.wait(timeout=wait_time)
     
     def peek(self) -> Optional[T]:
-        """Peek next item."""
-        with transaction():
+        """Peek at next item without removing."""
+        result = [None]
+        @atomically
+        def _do():
             items = self._items.deref()
-            return items[0] if items else None
+            result[0] = items[0] if items else None
+        _do()
+        return result[0]
     
     def size(self) -> int:
-        """Get size."""
-        with transaction():
-            return len(self._items.deref())
+        """Get queue size."""
+        result = [0]
+        @atomically
+        def _do():
+            result[0] = len(self._items.deref())
+        _do()
+        return result[0]
     
     def empty(self) -> bool:
         """Check if empty."""
@@ -2276,15 +2291,10 @@ class STMAgent(Generic[T]):
     Asynchronous agent for managing shared state.
     Sends actions to a thread pool.
     """
-    
-    if PYTHON_3_13_PLUS:
-        try:
-            _pool = asyncio.get_running_loop()
-        except RuntimeError:
-            _pool = None
-    else:
-        _pool = None
-    
+    __slots__ = (
+        '_ref', '_errors', '_lock', '_pending_count_lock', 
+        '_pending', '_pending_count'
+    )    
     def __init__(self, initial_value: T, name: Optional[str] = None):
         self._ref = Ref(initial_value, name=name)
         self._errors: List[Exception] = []
@@ -2478,7 +2488,9 @@ def dosync(
                         
                         backoff = coordinator.contention.get_backoff_for_retry(retry_count, refs)
                         time.sleep(backoff)
+                        coordinator.unregister_transaction(tx.id)
                         tx._reset_for_retry()
+                        coordinator.register_transaction(tx)
                     except Exception:
                         tx._abort()
                         raise
@@ -2500,17 +2512,9 @@ def transactional(timeout: float = 10.0, max_retries: int = 500):
     """Decorator with parameters for STM transactions."""
     return dosync(fn=None, timeout=timeout, max_retries=max_retries)
 
-def retry() -> None:
-    """Explicitly retry the current transaction."""
-    raise RetryException("Explicit retry requested")
-
 def alter(reference: Ref[T], fn: Callable[[T], T], *args, **kwargs) -> T:
     """Functional wrapper for Ref.alter()."""
     return reference.alter(fn, *args, **kwargs)
-
-def commute(reference: Ref[T], fn: Callable[[T], T], *args, **kwargs) -> T:
-    """Functional wrapper for Ref.commute()."""
-    return reference.commute(fn, *args, **kwargs)
 
 def write(reference: Ref[T], value: T) -> None:
     """Functional wrapper for Ref.set()."""
