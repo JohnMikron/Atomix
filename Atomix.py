@@ -642,8 +642,9 @@ class RWLock:
     def __init__(self):
         self._readers = 0
         self._writers = 0
-        self._read_ready = threading.Condition(threading.RLock())
-        self._write_ready = threading.Condition(threading.RLock())
+        self._lock = threading.RLock()
+        self._read_ready = threading.Condition(self._lock)
+        self._write_ready = threading.Condition(self._lock)
     
     def acquire_read(self, timeout: Optional[float] = None) -> bool:
         """Acquire read lock."""
@@ -745,8 +746,9 @@ class TransactionCoordinator:
     def reset(self) -> None:
         """Reset coordinator state (testing)."""
         with self._init_lock:
-            self._tx_counter = itertools.count(1)
-            self._ref_counter = itertools.count(1)
+            # We explicitly do NOT reset itertools counters here.
+            # Allowing IDs to increase infinitely prevents ID collisions with 
+            # references from prior tests that haven't been garbage collected.
             self._logical_clock = 0
             self._current_epoch = 0
             self._refs.clear()
@@ -1484,8 +1486,21 @@ class Ref(Generic[T]):
         """Read value in transaction."""
         tx = _get_current_transaction()
         if tx is None:
-            return self._seqlock.read()
+            try:
+                return self._seqlock.read()
+            except HistoryExpiredException:
+                return self._read_raw()
         return tx._read_ref(self)
+    
+    @property
+    def value(self) -> T:
+        """Get the current value."""
+        return self.deref()
+        
+    @value.setter
+    def value(self, new_value: T) -> None:
+        """Set the current value."""
+        self.set(new_value)
     
     def read(self) -> T:
         """Read without transaction (lock-free)."""
@@ -1533,12 +1548,11 @@ class Ref(Generic[T]):
         """Commutative operation."""
         tx = _get_current_transaction()
         if tx is None:
-            result = [None]
             @atomically
             def _do_commute():
                 _get_current_transaction()._commute_ref(self, fn, *args, **kwargs)
             _do_commute()
-            return result[0]
+            return self.deref()
         tx._commute_ref(self, fn, *args, **kwargs)
         return None
     
@@ -2177,6 +2191,8 @@ class STMQueue(Generic[T]):
                 with self._cond:
                     self._cond.notify_all()
                 return True
+            elif result is False:
+                return False
                 
             if deadline:
                 remaining = deadline - time.time()
@@ -2210,7 +2226,9 @@ class STMQueue(Generic[T]):
             if result is not _QUEUE_RETRY:
                 with self._cond:
                     self._cond.notify_all()
-                return None if result is _QUEUE_CLOSED else result
+                if result is _QUEUE_CLOSED:
+                    raise TimeoutException("Queue is closed")
+                return result
             
             if deadline:
                 remaining = deadline - time.time()
@@ -2438,34 +2456,35 @@ def dosync(
                 return func(*args, **kwargs)
 
             tx = Transaction(coordinator, timeout=timeout, max_retries=max_retries)
+            coordinator.register_transaction(tx)
+            _set_current_transaction(tx)
             
-            while True:
-                tx._retry_count = retry_count
-                _set_current_transaction(tx)
-                coordinator.register_transaction(tx)
-                try:
-                    with tx:
-                        result = func(*args, **kwargs)
-                    return result
-                except (RetryException, ConflictException) as e:
-                    retry_count += 1
-                    if retry_count > max_retries:
-                        raise CommitException(f"Max retries ({max_retries}) exceeded")
-                    
-                    # Backoff
-                    refs = set(tx._read_log.keys()) | set(tx._write_log.keys())
-                    if isinstance(e, ConflictException):
-                        refs |= e.conflicting_refs
-                    
-                    backoff = coordinator.contention.get_backoff_for_retry(retry_count, refs)
-                    time.sleep(backoff)
-                    tx._reset_for_retry()
-                except Exception:
-                    tx._abort()
-                    raise
-                finally:
-                    coordinator.unregister_transaction(tx.id)
-                    _set_current_transaction(None)
+            try:
+                while True:
+                    tx._retry_count = retry_count
+                    try:
+                        with tx:
+                            result = func(*args, **kwargs)
+                        return result
+                    except (RetryException, ConflictException) as e:
+                        retry_count += 1
+                        if retry_count > max_retries:
+                            raise CommitException(f"Max retries ({max_retries}) exceeded")
+                        
+                        # Backoff
+                        refs = set(tx._read_log.keys()) | set(tx._write_log.keys())
+                        if isinstance(e, ConflictException):
+                            refs |= e.conflicting_refs
+                        
+                        backoff = coordinator.contention.get_backoff_for_retry(retry_count, refs)
+                        time.sleep(backoff)
+                        tx._reset_for_retry()
+                    except Exception:
+                        tx._abort()
+                        raise
+            finally:
+                coordinator.unregister_transaction(tx.id)
+                _set_current_transaction(None)
         return inner
 
     if fn is not None:
@@ -2480,6 +2499,34 @@ def atomically(fn: Callable[..., R]) -> Callable[..., R]:
 def transactional(timeout: float = 10.0, max_retries: int = 500):
     """Decorator with parameters for STM transactions."""
     return dosync(fn=None, timeout=timeout, max_retries=max_retries)
+
+def retry() -> None:
+    """Explicitly retry the current transaction."""
+    raise RetryException("Explicit retry requested")
+
+def alter(reference: Ref[T], fn: Callable[[T], T], *args, **kwargs) -> T:
+    """Functional wrapper for Ref.alter()."""
+    return reference.alter(fn, *args, **kwargs)
+
+def commute(reference: Ref[T], fn: Callable[[T], T], *args, **kwargs) -> T:
+    """Functional wrapper for Ref.commute()."""
+    return reference.commute(fn, *args, **kwargs)
+
+def write(reference: Ref[T], value: T) -> None:
+    """Functional wrapper for Ref.set()."""
+    reference.set(value)
+
+def read(reference: Ref[T]) -> T:
+    """Functional wrapper for Ref.deref()."""
+    return reference.deref()
+
+def ref(value: T, **kwargs) -> Ref[T]:
+    """Factory for Ref."""
+    return Ref(value, **kwargs)
+
+def atom(value: T, **kwargs) -> Atom[T]:
+    """Factory for Atom."""
+    return Atom(value, **kwargs)
 
 
 # ============================================================================

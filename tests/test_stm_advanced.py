@@ -2,7 +2,7 @@ import unittest
 import threading
 import time
 import random
-from atomix_stm import Ref, atomically, dosync, STMQueue, RetryException, ConflictException
+from atomix_stm import Ref, atomically, dosync, STMQueue, RetryException, ConflictException, transaction
 
 class TestSTMAvanced(unittest.TestCase):
     
