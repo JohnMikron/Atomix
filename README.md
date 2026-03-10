@@ -1,4 +1,4 @@
-# Atomix STM (v3.2.6) ⚛️
+# Atomix STM (v3.2.7) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.9+ (No-GIL Ready)**
 
@@ -140,7 +140,15 @@ print(val)  # "hello"
 
 ## 🆕 Changelog
 
-### v3.2.6 (Current Version)
+### v3.2.7 (Current Version)
+- Fixed critical `TypeError` initialized during deferred evaluations in `_commute_ref`.
+- Removed duplicated `retry_count` overriding loops within `dosync()`.
+- Added standard `QueueClosedException` exception classes for clean queue drains.
+- Enforced strict validation checking on nested immediate-returns inside `dosync()`.
+- Eradicated writer starvation dead-locks internally in `RWLock` via pending barriers.
+- Hardened data-race conditions returning stale queue values during thread polling in `STMAgent.await_value()`.
+
+### v3.2.6 (2026-03-10)
 - Fixed double `unregister_transaction` logic bug inside `dosync()`.
 - Thread leak prevention via Race Condition Lock inside `STMAgent._agent_pool`.
 - Optimised STM latency via removal of 2nd read-set validation redundantly blocking commit paths.

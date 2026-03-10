@@ -1,17 +1,12 @@
 """
-Atomix v3.2.6 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.2.7 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
-primitives to Python, optimized for the No-GIL era with enterprise-grade features.
+to Python. Safely coordinate state across millions of operations without
+manual locks, deadlocks, or race conditions.
 
 Features:
-- MVCC with adaptive history management
-- Seqlock-based lock-free reads
-- Contention-aware retry scheduling
-- Background snapshot cleanup (The Reaper) - Adaptive Scheduling
-- Persistent immutable data structures (Vector, HashMap) - Level Bloat Fix
-- STM-aware queues, agents, and variables
 - Comprehensive diagnostics and monitoring
 - Full type safety with generics
 - PEP 703 compatible (No-GIL ready)
@@ -167,6 +162,11 @@ class HistoryExpiredException(ConflictException):
 
 class InvariantViolationException(STMException):
     """Transaction invariant violated."""
+    pass
+
+
+class QueueClosedException(STMException):
+    """STM Queue was permanently closed."""
     pass
 
 
@@ -642,6 +642,7 @@ class RWLock:
     def __init__(self):
         self._readers = 0
         self._writers = 0
+        self._pending_writers = 0
         self._lock = threading.RLock()
         self._read_ready = threading.Condition(self._lock)
         self._write_ready = threading.Condition(self._lock)
@@ -1144,6 +1145,10 @@ class Transaction:
             else:
                 # Defer to commit time
                 self._commutes[ref_id].append(CommuteEntry(
+                    ref_id=ref_id,
+                    function=fn,
+                    args=args,
+                    kwargs=kwargs
                 ))
                 # For deferred commutes, we can't return the final value yet.
                 # Return the current value as a best effort, or raise an error if strictness is needed.
@@ -2223,7 +2228,7 @@ class STMQueue(Generic[T]):
                 with self._cond:
                     self._cond.notify_all()
                 if result is _QUEUE_CLOSED:
-                    raise TimeoutException("Queue is closed")
+                    raise QueueClosedException("Queue is closed and empty")
                 return result
             
             if deadline is not None:
@@ -2463,6 +2468,7 @@ def dosync(
             # Check if already in a transaction
             existing_tx = _get_current_transaction()
             if existing_tx:
+                existing_tx._check_active()
                 return func(*args, **kwargs)
 
             tx = Transaction(coordinator, timeout=timeout, max_retries=max_retries)
@@ -2471,7 +2477,6 @@ def dosync(
             
             try:
                 while True:
-                    tx._retry_count = retry_count
                     try:
                         with tx:
                             result = func(*args, **kwargs)
