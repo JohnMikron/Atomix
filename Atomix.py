@@ -1,5 +1,5 @@
 """
-Atomix v3.2.5 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.2.6 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -18,14 +18,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.2.53
+Version: 3.2.63
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "3.2.5"
+__version__ = "3.2.6"
 
 import threading
 import time
@@ -841,9 +841,6 @@ class TransactionCoordinator:
         conflicting = set()
         
         for ref_id, read_version in read_set.items():
-            if ref_id in write_set:
-                continue
-            
             ref = self.get_ref(ref_id)
             if ref is None:
                 continue
@@ -1147,15 +1144,11 @@ class Transaction:
             else:
                 # Defer to commit time
                 self._commutes[ref_id].append(CommuteEntry(
-                    ref_id=ref_id,
-                    function=fn,
-                    args=args,
-                    kwargs=kwargs
                 ))
                 # For deferred commutes, we can't return the final value yet.
                 # Return the current value as a best effort, or raise an error if strictness is needed.
                 # For now, let's return the current value from the ref.
-                return ref.deref() # Return current value for immediate feedback
+                return ref._read_raw() # Return current value for immediate feedback
     
     def _prepare_inside_lock(self) -> Tuple[bool, Optional[FrozenSet[int]]]:
         """Prepare phase (assuming lock is held)."""
@@ -1197,20 +1190,10 @@ class Transaction:
                 if not success and conflicts:
                     self._coordinator.contention.record_conflict(conflicts, self._retry_count)
                     raise ConflictException(f"Transaction conflicted on refs {conflicts}", conflicting_refs=conflicts)
-                
                 # 2. Apply commutes
                 self._apply_commutes()
                 
-                # 3. Final validation (Full Read-Set Validation)
-                for ref_id, read_entry in self._read_log.items():
-                    ref = self._coordinator.get_ref(ref_id)
-                    if ref is None: 
-                        continue  # Ref was legitimately garbage collected
-                    if ref._get_version() != read_entry.version_read:
-                         self._coordinator.contention.record_conflict(frozenset([ref_id]), self._retry_count)
-                         raise ConflictException(f"Read-set conflict on ref {ref_id}", conflicting_refs=frozenset([ref_id]))
-
-                # 4. Commit values
+                # 3. Commit values
                 commit_version = self._coordinator.create_version_stamp(self.id)
                 for ref_id, entry in self._write_log.items():
                     ref = self._coordinator.get_ref(ref_id)
@@ -1513,7 +1496,7 @@ class Ref(Generic[T]):
         """Set value in transaction."""
         tx = _get_current_transaction()
         if tx is None:
-            self.alter(lambda _: value)
+            self.reset(value)
             return
         tx._write_ref(self, value)
     
@@ -1675,13 +1658,21 @@ class Atom(Generic[T]):
     
     def swap(self, fn: Callable[[T], T], *args, **kwargs) -> T:
         """Atomic swap."""
+        import random
+        retries = 0
         while True:
             seq = self._seqlock._sequence
             if seq & 1:
-                time.sleep(0.000001)
+                retries += 1
+                if retries > 1000:
+                    raise STMException("Max retries exceeded in Atom.swap")
+                time.sleep(min(0.001, 0.000001 * (2 ** (retries // 10)) + random.random() * 0.000001))
                 continue
             old_value = self._seqlock._value
             if self._seqlock._sequence != seq:
+                retries += 1
+                if retries > 1000:
+                    raise STMException("Max retries exceeded in Atom.swap")
                 continue
             
             new_value = fn(old_value, *args, **kwargs)
@@ -2176,14 +2167,14 @@ class STMQueue(Generic[T]):
         if self._closed.deref():
             return False
         
-        deadline = time.time() + timeout if timeout else None
+        deadline = time.time() + timeout if timeout is not None else None
         
         while True:
             @atomically
             def _do_put():
                 items = self._items.deref()
                 if self._maxsize > 0 and len(items) >= self._maxsize:
-                    if timeout and time.time() > deadline:
+                    if deadline is not None and time.time() >= deadline:
                         return False
                     return _QUEUE_RETRY  # retry flag
                 self._items.set(items + [item])
@@ -2197,7 +2188,7 @@ class STMQueue(Generic[T]):
             elif result is False:
                 return False
                 
-            if deadline:
+            if deadline is not None:
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     return False
@@ -2210,7 +2201,7 @@ class STMQueue(Generic[T]):
     
     def get(self, timeout: Optional[float] = None) -> Optional[T]:
         """Get item from queue. Blocks until available or timeout."""
-        deadline = time.time() + timeout if timeout else None
+        deadline = time.time() + timeout if timeout is not None else None
         
         while True:
             @atomically
@@ -2219,6 +2210,8 @@ class STMQueue(Generic[T]):
                 if not items:
                     if self._closed.deref():
                         return _QUEUE_CLOSED
+                    if deadline is not None and time.time() >= deadline:
+                        return _QUEUE_RETRY
                     return _QUEUE_RETRY  # Retry flag
                 
                 item = items[0]
@@ -2233,7 +2226,7 @@ class STMQueue(Generic[T]):
                     raise TimeoutException("Queue is closed")
                 return result
             
-            if deadline:
+            if deadline is not None:
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     raise TimeoutException(f"STMQueue.get() timed out after {timeout}s")
@@ -2291,6 +2284,8 @@ class STMAgent(Generic[T]):
         '_ref', '_errors', '_lock', '_pending_count_lock', 
         '_pending', '_pending_count'
     )    
+    _agent_pool_lock = threading.Lock()
+    
     def __init__(self, initial_value: T, name: Optional[str] = None):
         self._ref = Ref(initial_value, name=name)
         self._errors: List[Exception] = []
@@ -2321,12 +2316,14 @@ class STMAgent(Generic[T]):
                         self._pending.notify_all()
         
         if not hasattr(STMAgent, '_agent_pool'):
-            import concurrent.futures
-            import os
-            STMAgent._agent_pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=os.cpu_count() or 4,
-                thread_name_prefix="STMAgent"
-            )
+            with STMAgent._agent_pool_lock:
+                if not hasattr(STMAgent, '_agent_pool'):
+                    import concurrent.futures
+                    import os
+                    STMAgent._agent_pool = concurrent.futures.ThreadPoolExecutor(
+                        max_workers=os.cpu_count() or 4,
+                        thread_name_prefix="STMAgent"
+                    )
         STMAgent._agent_pool.submit(task)
 
     def deref(self) -> T:
@@ -2502,7 +2499,8 @@ def dosync(
                         tx._abort()
                         raise
             finally:
-                coordinator.unregister_transaction(tx.id)
+                if _get_current_transaction() is tx:
+                    coordinator.unregister_transaction(tx.id)
                 _set_current_transaction(None)
         return inner
 
@@ -2725,6 +2723,8 @@ def _cleanup():
     try:
         coordinator = TransactionCoordinator()
         coordinator._reaper.stop()
+        if hasattr(STMAgent, '_agent_pool'):
+            STMAgent._agent_pool.shutdown(wait=False)
         logger.info("STM cleanup complete")
     except:
         pass

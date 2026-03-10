@@ -1,4 +1,4 @@
-# Atomix STM (v3.2.5) ⚛️
+# Atomix STM (v3.2.6) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.9+ (No-GIL Ready)**
 
@@ -140,7 +140,17 @@ print(val)  # "hello"
 
 ## 🆕 Changelog
 
-### v3.2.5 (Current Version)
+### v3.2.6 (Current Version)
+- Fixed double `unregister_transaction` logic bug inside `dosync()`.
+- Thread leak prevention via Race Condition Lock inside `STMAgent._agent_pool`.
+- Optimised STM latency via removal of 2nd read-set validation redundantly blocking commit paths.
+- Removed deadlocks triggering during recursive evaluations in `_commute_ref()`.
+- Unbounded queue loops blocked forever via timeouts fixed in `STMQueue.put()`.
+- Performance overhead removed on `Ref.set()` context wrapping.
+- Unbounded busy-wait spin loops capped implicitly inside `Atom.swap()`.
+- Clean shutdown for unused background threads appended to `atexit`.
+
+### v3.2.5 (2026-03-10)
 - Fixed relative markdown links inside PyPI release details so internal documents are clickable.
 - Added absolute GitHub repositories inside package metadata configurations.
 
