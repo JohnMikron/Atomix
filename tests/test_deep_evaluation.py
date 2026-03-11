@@ -12,7 +12,7 @@ import sys
 
 from atomix_stm import (
     Ref, Atom, STMAgent, STMQueue, STMVar,
-    dosync, atomically, transactional, transaction,
+    dosync, atomically, transactional, _transaction,
     PersistentVector, PersistentHashMap,
     STMException, RetryException, ConflictException,
     CommitException, TransactionAbortedException,
@@ -164,12 +164,12 @@ class TestBug2_AtomCompareAndSet(unittest.TestCase):
 
 class TestBug3_TransactionNameCollision(unittest.TestCase):
     """Bug 3: The decorator `transaction()` at L1742 was shadowing the
-    context manager `transaction()` at L1662."""
+    context manager `_transaction()` at L1662."""
 
     def test_transaction_context_manager_still_works(self):
-        """The context manager `transaction()` should still be available."""
+        """The context manager `_transaction()` should still be available."""
         r = Ref(10)
-        with transaction() as tx:
+        with _transaction() as tx:
             r.alter(lambda x: x + 5)
         self.assertEqual(r.value, 15)
 
@@ -347,7 +347,7 @@ class TestVersionCheck(unittest.TestCase):
     def test_version(self):
         """Test version string."""
         import atomix_stm
-        self.assertEqual(atomix_stm.__version__, "3.3.0")
+        self.assertEqual(atomix_stm.__version__, "3.3.1")
 
 
 if __name__ == '__main__':

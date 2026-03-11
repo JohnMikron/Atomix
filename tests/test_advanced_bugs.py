@@ -1,7 +1,7 @@
 import unittest
 import time
 from Atomix import (
-    PersistentVector, STMQueue, Atom, transaction,
+    PersistentVector, STMQueue, Atom, _transaction,
     TransactionCoordinator, reset_stm, dosync
 )
 

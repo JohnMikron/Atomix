@@ -10,7 +10,7 @@ from .core import (
     STMVar,
     dosync,
     atomically,
-    transaction,
+    _transaction,
     transactional,
     retry,
     alter,
@@ -30,7 +30,7 @@ from .core import (
     InvariantViolationException
 )
 
-__version__ = "3.3.0"
+__version__ = "3.3.1"
 __author__ = "Atomix STM Maintainers"
 __license__ = "GPLv3 / Commercial"
 
@@ -46,7 +46,7 @@ __all__ = [
     'STMVar',
     'dosync',
     'atomically',
-    'transaction',
+    '_transaction',
     'transactional',
     'retry',
     'alter',

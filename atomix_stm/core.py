@@ -1,5 +1,5 @@
 """
-Atomix v3.3.0 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.3.1 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -13,14 +13,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.3.0
+Version: 3.3.1
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "3.3.0"
+__version__ = "3.3.1"
 
 import threading
 import time
@@ -548,12 +548,13 @@ class SpinLock:
     including the `spin_count` for retro-compatibility with tests.
     """
     
-    __slots__ = ('_lock', '_owner', '_spin_count')
+    __slots__ = ('_lock', '_owner', '_spin_count', '_recursion_count')
     
     def __init__(self):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._owner = None
         self._spin_count = 0
+        self._recursion_count = 0
     
     def acquire(self, timeout: Optional[float] = None) -> bool:
         """Acquire lock."""
@@ -561,8 +562,13 @@ class SpinLock:
             timeout = -1.0
         acquired = self._lock.acquire(timeout=timeout)
         if acquired:
-            self._owner = threading.current_thread().ident  # type: ignore
-            self._spin_count = 1  # Tracked for basic tests backwards-compatibility
+            ident = threading.current_thread().ident
+            if self._owner != ident:
+                self._owner = ident  # type: ignore
+                self._recursion_count = 1
+                self._spin_count = 1  # Tracked for basic tests backwards-compatibility
+            else:
+                self._recursion_count += 1
             return True
         return False
     
@@ -570,8 +576,10 @@ class SpinLock:
         """Release lock."""
         if self._owner != threading.current_thread().ident:
             raise RuntimeError("Lock not owned by current thread")
+        self._recursion_count -= 1
+        if self._recursion_count == 0:
+            self._owner = None
         self._lock.release()
-        self._owner = None
     
     def __enter__(self) -> 'SpinLock':
         self.acquire()
@@ -1293,7 +1301,7 @@ class Transaction:
             self._write_log.clear()
             self._commutes.clear()
             self._start_time = time.time()
-            self._retry_count = 0
+            self._start_time = time.time()
     
     def __enter__(self) -> 'Transaction':
         self._depth += 1
@@ -1458,8 +1466,8 @@ class Ref(Generic[T]):
             
             max_h = self._coordinator.history.compute_max_history(self._identity.id)
             start_idx = max(base_idx, len(self._history) - max_h)
-  # type: ignore
-            self._history = self._history[start_idx:]
+            
+            self._history = self._history[start_idx:]  # type: ignore
     
     def _validate(self, value: T) -> None:
         """Run validators."""
@@ -1684,26 +1692,15 @@ class Atom(Generic[T]):
         import random  # type: ignore
         retries = 0
         while True:
-            seq = self._seqlock._sequence
-            if seq & 1:
-                retries += 1
-                if retries > 1000:
-                    raise STMException("Max retries exceeded in Atom.swap")
-                time.sleep(min(0.001, 0.000001 * (2 ** (retries // 10)) + random.random() * 0.000001))
-                continue
-            old_value = self._seqlock._value
-            if self._seqlock._sequence != seq:
-                retries += 1
-                if retries > 1000:
-                    raise STMException("Max retries exceeded in Atom.swap")
-                time.sleep(min(0.001, 0.000001 * (2 ** (retries // 10)) + random.random() * 0.000001))
-                continue
+            with self._seqlock._write_lock:
+                seq = self._seqlock._sequence
+                old_value = self._seqlock._value
             
             new_value = fn(old_value, *args, **kwargs)
             
             if self._validator and not self._validator(new_value):  # type: ignore
                 raise ValidationException("Atom validation failed")
-  # type: ignore
+            
             success = False
             with self._seqlock._write_lock:
                 if self._seqlock._sequence == seq:
@@ -1711,6 +1708,7 @@ class Atom(Generic[T]):
                     self._seqlock._value = new_value
                     self._seqlock._sequence += 1
                     success = True
+            
             if success:
                 self._notify_watchers(old_value, new_value)
                 return new_value
@@ -2431,7 +2429,7 @@ def _set_current_transaction(tx: Optional[Transaction]) -> None:
 
   # type: ignore
 @contextmanager
-def transaction(
+def _transaction(
     timeout: float = 10.0,
     max_retries: int = 100,
     label: Optional[str] = None
@@ -2484,6 +2482,8 @@ def dosync(
             coordinator = TransactionCoordinator()
             retry_count = 0
             
+            old_tx = _get_current_transaction()
+            
             # Check if already in a transaction
             existing_tx = _get_current_transaction()
             if existing_tx:
@@ -2502,7 +2502,7 @@ def dosync(
                         return result
                     except TransactionAbortedException:
                         coordinator.unregister_transaction(tx.id)
-                        _set_current_transaction(None)
+                        _set_current_transaction(old_tx)
                         raise
                     except (RetryException, ConflictException) as e:
                         retry_count += 1
@@ -2525,7 +2525,7 @@ def dosync(
             finally:
                 if _get_current_transaction() is tx:
                     coordinator.unregister_transaction(tx.id)
-                _set_current_transaction(None)
+                _set_current_transaction(old_tx)
         return inner
 
     if fn is not None:
@@ -2574,7 +2574,7 @@ if PYTHON_3_13_PLUS:
         label: Optional[str] = None
     ) -> AsyncIterator[Transaction]:
         """Async context manager for transactions."""
-        with transaction(timeout=timeout, max_retries=max_retries, label=label) as tx:
+        with _transaction(timeout=timeout, max_retries=max_retries, label=label) as tx:
             yield tx
 
 
@@ -2846,7 +2846,7 @@ if __name__ == '__main__':
     
     run_concurrent([increment] * 100)
     
-    with transaction():
+    with _transaction():
         print(f"Counter: {counter.deref()}")
     
     # Demo bank transfer
@@ -2864,7 +2864,7 @@ if __name__ == '__main__':
     def deposit(amount: float):
         alice.alter(lambda x: x + amount)
     
-    with transaction():
+    with _transaction():
         print(f"Alice: ${alice.deref():.2f}")
         print(f"Bob: ${bob.deref():.2f}")
         print(f"Total: ${alice.deref() + bob.deref():.2f}")
