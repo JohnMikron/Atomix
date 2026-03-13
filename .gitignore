@@ -1,13 +1,47 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-dist/
+
+# Distribution / packaging
+bin/
 build/
+develop-eggs/
+dist/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
-.venv/
+.installed.cfg
+*.egg
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Environments
+.env
+.venv
+env/
 venv/
 ENV/
-tests/.pytest_cache/
-.coverage
-htmlcov/
-.DS_Store
+env.bak/
+venv.bak/
+
+# Project specifics
+test_errors.txt
+test_output.txt
+benchmark_results/
+.ipynb_checkpoints

@@ -1,5 +1,5 @@
 """
-Atomix v3.3.1 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.3.2 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -13,14 +13,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.3.1
+Version: 3.3.2
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "3.3.1"
+__version__ = "3.3.2"
 
 import threading
 import time
@@ -459,7 +459,10 @@ class HistoryManager:
         
         # Check memory pressure
         try:
-            import psutil  # type: ignore
+            # Lazy import to avoid per-call overhead
+            psutil = sys.modules.get('psutil')
+            if psutil is None:
+                import psutil
             memory_percent = psutil.virtual_memory().percent / 100.0
             if memory_percent > self._memory_threshold:
                 base = max(self._min_history, int(base * 0.5))
@@ -468,7 +471,7 @@ class HistoryManager:
                     f"Memory pressure detected ({memory_percent:.1%}), "
                     f"reducing history to {base}"
                 )
-        except ImportError:
+        except (ImportError, AttributeError):
             pass
         
         return base
@@ -1446,28 +1449,32 @@ class Ref(Generic[T]):
             self._access_time = time.time()
             
             retention_bound = self._coordinator.history.get_retention_bound()
-            self._trim_history(retention_bound)
+            self._trim_history_unlocked(retention_bound)
         
         self._seqlock.write(value)  # type: ignore
         return lambda: self._notify_watchers(old_value, value)
     
     def _trim_history(self, retention_logical_time: int) -> None:
-        """Trim history while preserving necessary base version."""
+        """Trim history while preserving necessary base version (thread-safe)."""
         with self._lock:
-            if len(self._history) <= 1:
-                return
-            
-            # Find the largest version V such that V <= retention_logical_time
-            base_idx = 0
-            for i in range(len(self._history) - 1, -1, -1):
-                if self._history[i][0].logical_time <= retention_logical_time:
-                    base_idx = i
-                    break
-            
-            max_h = self._coordinator.history.compute_max_history(self._identity.id)
-            start_idx = max(base_idx, len(self._history) - max_h)
-            
-            self._history = self._history[start_idx:]  # type: ignore
+            self._trim_history_unlocked(retention_logical_time)
+
+    def _trim_history_unlocked(self, retention_logical_time: int) -> None:
+        """Trim history while preserving necessary base version (assumes lock held)."""
+        if len(self._history) <= 1:
+            return
+        
+        # Find the largest version V such that V <= retention_logical_time
+        base_idx = 0
+        for i in range(len(self._history) - 1, -1, -1):
+            if self._history[i][0].logical_time <= retention_logical_time:
+                base_idx = i
+                break
+        
+        max_h = self._coordinator.history.compute_max_history(self._identity.id)
+        start_idx = max(base_idx, len(self._history) - max_h)
+        
+        self._history = self._history[start_idx:]
     
     def _validate(self, value: T) -> None:
         """Run validators."""
@@ -1712,6 +1719,15 @@ class Atom(Generic[T]):
             if success:
                 self._notify_watchers(old_value, new_value)
                 return new_value
+            
+            # CAS failure backoff
+            retries += 1
+            if retries > 1000:
+                 raise CommitException("Atom.swap exceeded max retries (1000)")
+            
+            # Exponential backoff with jitter
+            backoff = min(0.1, 0.0001 * (2 ** min(retries, 10)))
+            time.sleep(backoff * (0.5 + random.random()))
 
     def compare_and_set(self, expected: T, new_value: T) -> bool:
         """CAS operation."""
@@ -2069,7 +2085,8 @@ class PersistentHashMap(Generic[K, V]):
     
     def contains(self, key: K) -> bool:
         """Check if key exists."""
-        return self.get(key) is not None
+        sentinel = object()
+        return self.get(key, default=sentinel) is not sentinel
     
     def keys(self) -> Iterator[K]:
         """Iterate keys."""
@@ -2429,7 +2446,7 @@ def _set_current_transaction(tx: Optional[Transaction]) -> None:
 
   # type: ignore
 @contextmanager
-def _transaction(
+def transaction(
     timeout: float = 10.0,
     max_retries: int = 100,
     label: Optional[str] = None
@@ -2457,7 +2474,7 @@ def _transaction(
     finally:
         if not old_tx:
             coordinator.unregister_transaction(tx.id)
-            _set_current_transaction(old_tx)
+        _set_current_transaction(old_tx)
 
 
 def dosync(
@@ -2574,7 +2591,7 @@ if PYTHON_3_13_PLUS:
         label: Optional[str] = None
     ) -> AsyncIterator[Transaction]:
         """Async context manager for transactions."""
-        with _transaction(timeout=timeout, max_retries=max_retries, label=label) as tx:
+        with transaction(timeout=timeout, max_retries=max_retries, label=label) as tx:
             yield tx
 
 
@@ -2833,7 +2850,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     
     print("=" * 70)
-    print("Atomix v3.2 - Ultimate Production-Ready STM Library for Python 3.13+")
+    print("Atomix v3.3.2 - Ultimate Production-Ready STM Library for Python 3.13+")
     print("=" * 70)
     
     # Demo basic transaction
@@ -2846,7 +2863,7 @@ if __name__ == '__main__':
     
     run_concurrent([increment] * 100)
     
-    with _transaction():
+    with transaction():
         print(f"Counter: {counter.deref()}")
     
     # Demo bank transfer
@@ -2864,7 +2881,7 @@ if __name__ == '__main__':
     def deposit(amount: float):
         alice.alter(lambda x: x + amount)
     
-    with _transaction():
+    with transaction():
         print(f"Alice: ${alice.deref():.2f}")
         print(f"Bob: ${bob.deref():.2f}")
         print(f"Total: ${alice.deref() + bob.deref():.2f}")

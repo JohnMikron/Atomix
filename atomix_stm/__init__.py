@@ -10,15 +10,17 @@ from .core import (
     STMVar,
     dosync,
     atomically,
-    _transaction,
+    transaction,
     transactional,
     retry,
     alter,
-    commute,
     write,
     read,
     ref,
     atom,
+    reset_stm,
+    get_stm_stats,
+    TransactionCoordinator,
     STMException,
     RetryException,
     CommitException,
@@ -30,12 +32,11 @@ from .core import (
     InvariantViolationException
 )
 
-__version__ = "3.3.1"
+__version__ = "3.3.2"
 __author__ = "Atomix STM Maintainers"
 __license__ = "GPLv3 / Commercial"
 
 __all__ = [
-    'TransactionCoordinator',
     'Transaction',
     'Ref',
     'Atom',
@@ -46,15 +47,17 @@ __all__ = [
     'STMVar',
     'dosync',
     'atomically',
-    '_transaction',
+    'transaction',
     'transactional',
     'retry',
     'alter',
-    'commute',
     'write',
     'read',
     'ref',
     'atom',
+    'reset_stm',
+    'get_stm_stats',
+    'TransactionCoordinator',
     'STMException',
     'RetryException',
     'CommitException',

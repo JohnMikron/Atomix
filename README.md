@@ -1,4 +1,4 @@
-# Atomix STM (v3.2.9) ⚛️
+# Atomix STM (v3.3.2) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.9+ (No-GIL Ready)**
 
@@ -66,7 +66,7 @@ pip install atomix-stm
 - **`STMQueue`**: Transactional FIFO queue with blocking `get()`.
 - **`STMVar`**: Thread-local dynamic variable bindings.
 - **Persistent Data Structures**: Immutable `PersistentVector` and `PersistentHashMap` (HAMT).
-- **Diagnostics**: Built-in monitoring with `STMDiagnostics`.
+- **Diagnostics**: Built-in monitoring with `get_stm_stats()`.
 
 ---
 
