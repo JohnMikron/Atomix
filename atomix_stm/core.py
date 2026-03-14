@@ -1,5 +1,5 @@
 """
-Atomix v3.3.2 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.3.3 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -13,14 +13,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.3.2
+Version: 3.3.3
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "3.3.2"
+__version__ = "3.3.3"
 
 import threading
 import time
@@ -1304,7 +1304,6 @@ class Transaction:
             self._write_log.clear()
             self._commutes.clear()
             self._start_time = time.time()
-            self._start_time = time.time()
     
     def __enter__(self) -> 'Transaction':
         self._depth += 1
@@ -1481,7 +1480,7 @@ class Ref(Generic[T]):
         for validator in self._validators:
             if not validator(value):
                 raise ValidationException(f"Validation failed for Ref {self._identity.id}")
-  # type: ignore
+        # type: ignore
         if self._invariant and not self._invariant(value):
             raise InvariantViolationException(f"Invariant violated for Ref {self._identity.id}")
     
@@ -1579,7 +1578,7 @@ class Ref(Generic[T]):
             _do_commute()
             return result[0]  # type: ignore
         return tx._commute_ref(self, fn, *args, **kwargs)
-  # type: ignore
+        # type: ignore
     def add_validator(self, validator: Callable[[T], bool]) -> 'Ref[T]':
         """Add validator."""
         with self._lock:
@@ -1696,7 +1695,6 @@ class Atom(Generic[T]):
     
     def swap(self, fn: Callable[[T], T], *args, **kwargs) -> T:  # type: ignore
         """Atomic swap."""
-        import random  # type: ignore
         retries = 0
         while True:
             with self._seqlock._write_lock:
@@ -2256,7 +2254,7 @@ class STMQueue(Generic[T]):
                 item = items[0]
                 self._items.set(items[1:])  # type: ignore
                 return item
-  # type: ignore
+                # type: ignore
             result = _do_get()
             if result is not _QUEUE_RETRY:
                 with self._cond:
@@ -2502,7 +2500,7 @@ def dosync(
             old_tx = _get_current_transaction()
             
             # Check if already in a transaction
-            existing_tx = _get_current_transaction()
+            existing_tx = old_tx
             if existing_tx:
                 existing_tx._check_active()
                 return func(*args, **kwargs)
@@ -2850,7 +2848,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     
     print("=" * 70)
-    print("Atomix v3.3.2 - Ultimate Production-Ready STM Library for Python 3.13+")
+    print(f"Atomix v{__version__} - Ultimate Production-Ready STM Library for Python 3.13+")
     print("=" * 70)
     
     # Demo basic transaction

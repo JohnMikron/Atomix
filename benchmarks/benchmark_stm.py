@@ -37,10 +37,12 @@ def benchmark_reads(num_readers=8, num_writers=2, iterations=5000):
         for _ in range(iterations):
             _ = data.value
 
-    @atomically
     def writer():
         for _ in range(iterations // 10):
-            data.alter(lambda x: x + 1)
+            @atomically
+            def _write():
+                data.alter(lambda x: x + 1)
+            _write()
 
     start_time = time.time()
     threads = []

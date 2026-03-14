@@ -6,9 +6,9 @@ The following versions of Atomix STM receive security updates:
 
 | Version | Supported          |
 |---------|--------------------|
-| 3.2.x   | ✅ Active support  |
-| 3.1.x   | ⚠️ Critical fixes only |
-| < 3.1   | ❌ End of life     |
+| 3.3.x   | ✅ Active support  |
+| 3.2.x   | ⚠️ Critical fixes only |
+| < 3.2   | ❌ End of life     |
 
 We recommend always using the latest stable release.
 

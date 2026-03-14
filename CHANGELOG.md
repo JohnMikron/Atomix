@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.3.3] - 2026-03-14
+
+### Fixed
+- Removed duplicate `self._start_time` assignment in `_reset_for_retry()`.
+- Removed redundant `import random` inside `Atom.swap()`.
+- Consolidated `old_tx` / `existing_tx` lookups in `dosync()`.
+- Fixed misindented `# type: ignore` comments in `STMQueue.get()`, `Ref._validate()`, and `Ref.commute()`.
+- Fixed late-binding closure bug in `examples/basic_usage.py`.
+
+### Changed
+- Refactored `benchmarks/benchmark_stm.py` to run atomic operations individually for realistic contention simulation.
+- Removed duplicate `TransactionCoordinator` import from `__init__.py`.
+
+### Added
+- GitHub Actions CI pipeline (`.github/workflows/test.yml`) for automated testing on Python 3.13 and 3.14-dev.
+
 ## [3.3.2] - 2026-03-13
 
 ### Changed

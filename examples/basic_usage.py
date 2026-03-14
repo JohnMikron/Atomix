@@ -26,7 +26,7 @@ def queue_example():
     
     def producer():
         for i in range(10):
-            dosync(lambda: q.put(f"Msg-{i}"))
+            dosync(lambda i=i: q.put(f"Msg-{i}"))
             print(f"Produced Msg-{i}")
             time.sleep(0.05)
 

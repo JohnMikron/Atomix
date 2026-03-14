@@ -1,4 +1,4 @@
-# Atomix STM (v3.3.2) ⚛️
+# Atomix STM (v3.3.3) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.9+ (No-GIL Ready)**
 
@@ -140,7 +140,7 @@ print(val)  # "hello"
 
 ## 🆕 Changelog
 
-### v3.2.7 (Current Version)
+### v3.2.7
 - Fixed critical `TypeError` initialized during deferred evaluations in `_commute_ref`.
 - Removed duplicated `retry_count` overriding loops within `dosync()`.
 - Added standard `QueueClosedException` exception classes for clean queue drains.
@@ -225,3 +225,15 @@ Please also review our [Code of Conduct](https://github.com/JohnMikron/Atomix/bl
 ---
 
 © 2026 Atomix STM Project.
+### v3.3.2 (Stable)
+- Critical fix for `dosync` nested transaction context state.
+- Resolved `Atom.swap` data race in No-GIL environments (PEP 703).
+- Fixed `SpinLock` reentrancy deadlock via `RLock`.
+- Added `PersistentHashMap` `sentinel` for `None` detection.
+- Polished documentation and examples.
+
+### v3.3.3 (Latest)
+- Corrected misindented `# type: ignore` comments.
+- Cleaned up redundant code patterns and duplicate imports.
+- Fixed late-binding bug in example producer logic.
+- Automated CI/CD workflows for regression testing.
