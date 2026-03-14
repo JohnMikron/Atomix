@@ -4,7 +4,7 @@ import time
 import random
 from atomix_stm import Ref, atomically, dosync, STMQueue, RetryException, ConflictException, transaction
 
-class TestSTMAvanced(unittest.TestCase):
+class TestSTMAdvanced(unittest.TestCase):
     
     def test_nested_transactions(self):
         """Verify that nested transactions flatten correctly."""

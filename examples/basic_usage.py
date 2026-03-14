@@ -32,7 +32,7 @@ def queue_example():
 
     def consumer():
         for _ in range(10):
-            msg = dosync(lambda: q.get())
+            msg = q.get(timeout=5.0)
             print(f"Consumed {msg}")
 
     p = threading.Thread(target=producer)

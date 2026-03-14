@@ -1,5 +1,5 @@
 """
-Atomix v3.3.3 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v3.3.4 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -13,14 +13,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.3.3
+Version: 3.3.4
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "3.3.3"
+__version__ = "3.3.4"
 
 import threading
 import time
@@ -1480,7 +1480,6 @@ class Ref(Generic[T]):
         for validator in self._validators:
             if not validator(value):
                 raise ValidationException(f"Validation failed for Ref {self._identity.id}")
-        # type: ignore
         if self._invariant and not self._invariant(value):
             raise InvariantViolationException(f"Invariant violated for Ref {self._identity.id}")
     
@@ -1578,7 +1577,7 @@ class Ref(Generic[T]):
             _do_commute()
             return result[0]  # type: ignore
         return tx._commute_ref(self, fn, *args, **kwargs)
-        # type: ignore
+
     def add_validator(self, validator: Callable[[T], bool]) -> 'Ref[T]':
         """Add validator."""
         with self._lock:
@@ -1687,7 +1686,6 @@ class Atom(Generic[T]):
         """Reset value."""
         if self._validator and not self._validator(new_value):  # type: ignore
             raise ValidationException("Atom validation failed")
-  # type: ignore
         old_value = self._seqlock.read()
         self._seqlock.write(new_value)
         self._notify_watchers(old_value, new_value)
@@ -1731,7 +1729,6 @@ class Atom(Generic[T]):
         """CAS operation."""
         if self._validator and not self._validator(new_value):  # type: ignore
             raise ValidationException("Atom validation failed")
-  # type: ignore
         success = False
         with self._seqlock._write_lock:
             if self._seqlock._value is expected or self._seqlock._value == expected:
@@ -2442,7 +2439,7 @@ def _set_current_transaction(tx: Optional[Transaction]) -> None:
     """Set current transaction."""
     _tx_context.tx = tx  # type: ignore
 
-  # type: ignore
+
 @contextmanager
 def transaction(
     timeout: float = 10.0,
@@ -2500,9 +2497,8 @@ def dosync(
             old_tx = _get_current_transaction()
             
             # Check if already in a transaction
-            existing_tx = old_tx
-            if existing_tx:
-                existing_tx._check_active()
+            if old_tx:
+                old_tx._check_active()
                 return func(*args, **kwargs)
 
             tx = Transaction(coordinator, timeout=timeout, max_retries=max_retries)

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.3.4] - 2026-03-14
+
+### Fixed
+- Removed all stray/floating `# type: ignore` comments (5 locations in `core.py`).
+- Eliminated `old_tx`/`existing_tx` redundant alias in `dosync()`.
+- Fixed `TestSTMAvanced` → `TestSTMAdvanced` class name typo.
+- Removed `dosync` double-wrapping in `examples/basic_usage.py`.
+- Aligned Python version references to 3.13+ across README and badges.
+- Added missing v3.3.0–v3.3.3 entries to README changelog.
+- Moved misplaced changelog entries above copyright line in README.
+
+### Removed
+- Removed legacy `setup.py` in favor of `pyproject.toml`.
+
 ## [3.3.3] - 2026-03-14
 
 ### Fixed
@@ -12,11 +26,11 @@ All notable changes to this project will be documented in this file.
 - Fixed late-binding closure bug in `examples/basic_usage.py`.
 
 ### Changed
-- Refactored `benchmarks/benchmark_stm.py` to run atomic operations individually for realistic contention simulation.
+- Refactored `benchmarks/benchmark_stm.py` for realistic contention simulation.
 - Removed duplicate `TransactionCoordinator` import from `__init__.py`.
 
 ### Added
-- GitHub Actions CI pipeline (`.github/workflows/test.yml`) for automated testing on Python 3.13 and 3.14-dev.
+- GitHub Actions CI pipeline (`.github/workflows/test.yml`).
 
 ## [3.3.2] - 2026-03-13
 
@@ -28,14 +42,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - **dosync context restoration**: Fixed bug where existing transaction context was lost after a `dosync` block.
-- **Atom.swap livelock**: Implemented exponential backoff with jitter in `Atom.swap` to prevent CPU spinning in high-contention environments.
+- **Atom.swap livelock**: Implemented exponential backoff with jitter in `Atom.swap`.
 - **PersistentHashMap.contains**: Corrected logic to properly detect `None` values.
-- **_trim_history reentrancy**: Removed redundant lock acquisition to improve stability.
+- **_trim_history reentrancy**: Removed redundant lock acquisition.
 - **psutil performance**: Optimized `psutil` import to be lazy-loaded.
 
 ### Changed
 - **Public API**: Renamed internal `_transaction` to public-ready `transaction` context manager.
-- **Versioning**: Standardized versioning across all core files and metadata.
 
 ### Removed
 - Removed legacy `Atomix.py` root file in favor of modular `atomix_stm` package.

@@ -40,7 +40,7 @@ By participating in this project, you agree to abide by our [Code of Conduct](CO
 
 ### Prerequisites
 
-- **Python 3.9+** (Python 3.13+ recommended for free-threading features)
+- **Python 3.13+** (recommended for free-threading features)
 - **Git** for version control
 
 ### Install in Development Mode
@@ -72,7 +72,6 @@ Atomix/
 ├── benchmarks/           # Performance benchmarks
 ├── examples/             # Usage examples
 ├── pyproject.toml        # Build configuration
-├── setup.py              # Setup script
 └── README.md
 ```
 

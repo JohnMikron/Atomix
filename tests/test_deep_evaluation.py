@@ -1,5 +1,5 @@
 """
-Atomix v3.3.3 — Deep Evaluation Test Suite
+Atomix v3.3.4 — Deep Evaluation Test Suite
 ==========================================
 =
 Comprehensive tests covering all 5 bug fixes and new improvements.
@@ -347,7 +347,7 @@ class TestVersionCheck(unittest.TestCase):
     def test_version(self):
         """Test version string."""
         import atomix_stm
-        self.assertEqual(atomix_stm.__version__, "3.3.3")
+        self.assertEqual(atomix_stm.__version__, "3.3.4")
 
 
 if __name__ == '__main__':

@@ -1,11 +1,11 @@
-# Atomix STM (v3.3.3) ⚛️
+# Atomix STM (v3.3.4) ⚛️
 
-**Production-grade Software Transactional Memory for Python 3.9+ (No-GIL Ready)**
+**Production-grade Software Transactional Memory for Python 3.13+ (No-GIL Ready)**
 
 Atomix STM brings the power of Clojure-style concurrency to Python. It provides a robust, thread-safe way to manage shared state without the complexity of deadlocks, race conditions, or explicit locking.
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 
 ---
 
@@ -140,6 +140,37 @@ print(val)  # "hello"
 
 ## 🆕 Changelog
 
+### v3.3.4 (Latest)
+- Removed all stray/floating `# type: ignore` comments across the codebase.
+- Eliminated `old_tx`/`existing_tx` redundant alias in `dosync()`.
+- Fixed `TestSTMAvanced` → `TestSTMAdvanced` class name typo.
+- Removed `dosync` double-wrapping in `examples/basic_usage.py`.
+- Removed legacy `setup.py` in favor of `pyproject.toml`.
+- Aligned Python version references to 3.13+ everywhere.
+
+### v3.3.3
+- Corrected misindented `# type: ignore` comments.
+- Cleaned up redundant code patterns and duplicate imports.
+- Fixed late-binding bug in example producer logic.
+- Automated CI/CD workflows for regression testing.
+
+### v3.3.2
+- Critical fix for `dosync` nested transaction context state.
+- Resolved `Atom.swap` data race in No-GIL environments (PEP 703).
+- Fixed `SpinLock` reentrancy deadlock via `RLock`.
+- Added `PersistentHashMap` `sentinel` for `None` detection.
+
+### v3.3.1
+- Fixed `dosync` context restoration for nested transactions.
+- Implemented exponential backoff with jitter in `Atom.swap`.
+- Lazy-loaded `psutil` for reduced import overhead.
+- Renamed internal `_transaction` to public `transaction` context manager.
+
+### v3.3.0
+- Major overhaul: 12 critical bug fixes and architectural improvements.
+- Added `py.typed` marker for PEP 561 compliance.
+- New documentation: `TUTORIAL.md`, `COMPARISON.md`, ecosystem examples.
+
 ### v3.2.7
 - Fixed critical `TypeError` initialized during deferred evaluations in `_commute_ref`.
 - Removed duplicated `retry_count` overriding loops within `dosync()`.
@@ -225,15 +256,3 @@ Please also review our [Code of Conduct](https://github.com/JohnMikron/Atomix/bl
 ---
 
 © 2026 Atomix STM Project.
-### v3.3.2 (Stable)
-- Critical fix for `dosync` nested transaction context state.
-- Resolved `Atom.swap` data race in No-GIL environments (PEP 703).
-- Fixed `SpinLock` reentrancy deadlock via `RLock`.
-- Added `PersistentHashMap` `sentinel` for `None` detection.
-- Polished documentation and examples.
-
-### v3.3.3 (Latest)
-- Corrected misindented `# type: ignore` comments.
-- Cleaned up redundant code patterns and duplicate imports.
-- Fixed late-binding bug in example producer logic.
-- Automated CI/CD workflows for regression testing.
