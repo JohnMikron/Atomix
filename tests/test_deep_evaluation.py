@@ -347,7 +347,152 @@ class TestVersionCheck(unittest.TestCase):
     def test_version(self):
         """Test version string."""
         import atomix_stm
-        self.assertEqual(atomix_stm.__version__, "3.3.4")
+        self.assertEqual(atomix_stm.__version__, "3.3.5")
+
+
+class TestBug2_VersionStampOrdering(unittest.TestCase):
+    """Bug 2: VersionStamp compared physical times."""
+    
+    def test_versionstamp_equality(self):
+        from atomix_stm.core import VersionStamp
+        v1 = VersionStamp(epoch=1, logical_time=2, transaction_id=3)
+        v2 = VersionStamp(epoch=1, logical_time=2, transaction_id=3)
+        v2.physical_time = v1.physical_time + 10.0
+        self.assertEqual(v1, v2)
+        self.assertEqual(hash(v1), hash(v2))
+        self.assertFalse(v1 < v2)
+        self.assertFalse(v2 < v1)
+
+class TestBug1_SeqLockContention(unittest.TestCase):
+    """Bug 1: SeqLock GIL Safety."""
+    
+    def test_seqlock_exponential_backoff(self):
+        from atomix_stm.core import SeqLock
+        lock = SeqLock(0)
+        
+        reads = []
+        def reader():
+            for _ in range(100):
+                reads.append(lock.read())
+        
+        def writer():
+            for i in range(100):
+                with lock._write_lock:
+                    lock._sequence += 1
+                    time.sleep(0.0001)
+                    lock._value = i + 1
+                    lock._sequence += 1
+                    
+        t1 = threading.Thread(target=reader)
+        t2 = threading.Thread(target=writer)
+        t2.start()
+        t1.start()
+        t1.join()
+        t2.join()
+        self.assertGreater(len(reads), 0)
+
+class TestBug3_HistoryExpiredException(unittest.TestCase):
+    """Bug 3: Test snapshot expiration."""
+    
+    def test_history_expired(self):
+        from atomix_stm.core import HistoryExpiredException, TransactionCoordinator
+        r = Ref(0)
+        c = TransactionCoordinator()
+        
+        @atomically
+        def write_many():
+            for i in range(10):
+                r.set(i)
+        
+        write_many()
+        
+        with self.assertRaises(HistoryExpiredException):
+            with transaction() as tx:
+                tx.snapshot_version.logical_time -= 1000
+                r.deref()
+
+class TestBug5_DosyncSnapshotDrift(unittest.TestCase):
+    """Bug 5: Verify dosync drift/unregistration happens correctly."""
+    
+    def test_snapshot_unregistered_during_backoff(self):
+        from atomix_stm.core import TransactionCoordinator
+        coord = TransactionCoordinator()
+        initial_snapshots = len(coord.history._active_snapshots)
+        
+        r1 = Ref(0)
+        r2 = Ref(0)
+        
+        events = []
+        
+        def slow_tx():
+            try:
+                @atomically
+                def _tx():
+                    v = r1.deref()
+                    events.append("running")
+                    time.sleep(0.3)
+                    r2.set(v + 1)
+                _tx()
+            except Exception:
+                pass
+                
+        def fast_tx():
+            time.sleep(0.05)
+            @atomically
+            def _tx():
+                r1.set(10)
+            _tx()
+                
+        t1 = threading.Thread(target=slow_tx)
+        t2 = threading.Thread(target=fast_tx)
+        t1.start()
+        t2.start()
+        
+        time.sleep(0.15)
+        with coord.history._snapshots_lock:
+            peak_snapshots = len(coord.history._active_snapshots)
+            
+        t1.join()
+        t2.join()
+        
+        with coord.history._snapshots_lock:
+            final_snapshots = len(coord.history._active_snapshots)
+            
+        self.assertIn("running", events)
+        self.assertGreaterEqual(peak_snapshots, initial_snapshots)
+        self.assertEqual(final_snapshots, initial_snapshots)
+
+class MockKey:
+    def __init__(self, value, hash_val):
+        self.value = value
+        self._hash = hash_val
+    def __hash__(self):
+        return self._hash
+    def __eq__(self, other):
+        return isinstance(other, MockKey) and self.value == other.value
+
+class TestBug7_PersistentHashMapCollisions(unittest.TestCase):
+    """Bug 7: PersistentHashMap sub-trie mock collision testing."""
+    
+    def test_hamt_subtrie_promotion(self):
+        hmap = PersistentHashMap()
+        
+        params = [
+            (MockKey("A", 1), "A"),
+            (MockKey("B", 1), "B"),
+            (MockKey("C", 1 | (1 << 5)), "C"), 
+        ]
+        
+        for k, v in params:
+            hmap = hmap.assoc(k, v)
+        
+        self.assertEqual(hmap.get(MockKey("A", 1)), "A")
+        self.assertEqual(hmap.get(MockKey("B", 1)), "B")
+        self.assertEqual(hmap.get(MockKey("C", 1 | (1 << 5))), "C")
+        
+        hmap = hmap.dissoc(MockKey("A", 1))
+        self.assertIsNone(hmap.get(MockKey("A", 1)))
+        self.assertEqual(hmap.get(MockKey("B", 1)), "B")
 
 
 if __name__ == '__main__':

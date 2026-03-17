@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.3.5] - 2026-03-17
+
+### Fixed
+- `SeqLock.read()` spinloop GIL safety under high contention using exponential backoff.
+- `VersionStamp` ordering issue, focusing on `logical_time` over `physical_time` to prevent false conflict detection.
+- `Atom.swap()` encapsulation violation, by introducing `SeqLock.cas()`.
+- `STMQueue.put()` and `get()` busy wait loops removed in favor of explicit `wait()` blocks outside of transactions.
+- `dosync` snapshot unregistration drift bug fixed during retries.
+- `HistoryManager` now caches the `psutil` lazy import to improve performance.
+- `PersistentHashMap` hash collision handling using recursive sub-tries and depth tracking.
+
+### Added
+- 5 new test classes validating `VersionStamp`, `SeqLock` GIL safety, `HistoryExpiredException`, `dosync` snapshots, and sub-trie collisions.
+
 ## [3.3.4] - 2026-03-14
 
 ### Fixed

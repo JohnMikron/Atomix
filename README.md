@@ -1,4 +1,4 @@
-# Atomix STM (v3.3.4) ⚛️
+# Atomix STM (v3.3.5) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.13+ (No-GIL Ready)**
 

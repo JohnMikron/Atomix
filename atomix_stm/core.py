@@ -20,7 +20,7 @@ License: GPLv3 / Commercial
 
 from __future__ import annotations
 
-__version__ = "3.3.4"
+__version__ = "3.3.5"
 
 import threading
 import time
@@ -180,13 +180,32 @@ class TransactionState(Enum):
     RETRYING = auto()
 
 
-@dataclass(frozen=True, order=True, slots=True)
+@dataclass(slots=True)
 class VersionStamp:
     """Immutable version identifier for MVCC."""
     epoch: int = 0
     logical_time: int = 0
     transaction_id: int = 0
     physical_time: float = field(default_factory=time.time)
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, VersionStamp):
+            return False
+        return (self.epoch == other.epoch and 
+                self.logical_time == other.logical_time and
+                self.transaction_id == other.transaction_id)
+
+    def __lt__(self, other: Any) -> bool:
+        if not isinstance(other, VersionStamp):
+            return NotImplemented
+        if self.epoch != other.epoch:
+            return self.epoch < other.epoch
+        if self.logical_time != other.logical_time:
+            return self.logical_time < other.logical_time
+        return self.transaction_id < other.transaction_id
+
+    def __hash__(self) -> int:
+        return hash((self.epoch, self.logical_time, self.transaction_id))
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,6 +431,14 @@ class HistoryManager:
         self._memory_threshold = memory_threshold_percent / 100.0
         self._access_threshold = access_threshold
         
+        # Cache psutil availability to avoid per-call overhead
+        self._psutil_available = False
+        try:
+            import psutil  # type: ignore
+            self._psutil_available = True
+        except ImportError:
+            pass
+        
         self._active_snapshots: Dict[int, Tuple[VersionStamp, float]] = {}
         self._snapshots_lock = threading.RLock()
         
@@ -458,21 +485,19 @@ class HistoryManager:
                     base = int(base * 1.5)
         
         # Check memory pressure
-        try:
-            # Lazy import to avoid per-call overhead
-            psutil = sys.modules.get('psutil')
-            if psutil is None:
-                import psutil
-            memory_percent = psutil.virtual_memory().percent / 100.0
-            if memory_percent > self._memory_threshold:
-                base = max(self._min_history, int(base * 0.5))
-                self._memory_pressure_events += 1
-                logger.debug(
-                    f"Memory pressure detected ({memory_percent:.1%}), "
-                    f"reducing history to {base}"
-                )
-        except (ImportError, AttributeError):
-            pass
+        if self._psutil_available:
+            try:
+                import psutil  # type: ignore
+                memory_percent = psutil.virtual_memory().percent / 100.0
+                if memory_percent > self._memory_threshold:
+                    base = max(self._min_history, int(base * 0.5))
+                    self._memory_pressure_events += 1
+                    logger.debug(
+                        f"Memory pressure detected ({memory_percent:.1%}), "
+                        f"reducing history to {base}"
+                    )
+            except (ImportError, AttributeError):
+                self._psutil_available = False
         
         return base
     
@@ -611,14 +636,16 @@ class SeqLock(Generic[T]):
         self._value = initial_value
         self._write_lock = threading.Lock()
     
-    def read(self) -> T:  # type: ignore
+    def read(self) -> T:
         """Lock-free optimistic read."""
+        spins: int = 0
         while True:
             seq1 = self._sequence
             
             # Odd sequence = write in progress
             if seq1 & 1:
-                time.sleep(0.000001)
+                spins += 1
+                time.sleep(min(0.001, 1e-6 * (2 ** min(spins, 10))))
                 continue
             
             value = self._value
@@ -637,6 +664,16 @@ class SeqLock(Generic[T]):
     def get_version(self) -> int:
         """Get current sequence number."""
         return self._sequence
+
+    def cas(self, expected_seq: int, expected_value: T, new_value: T) -> bool:
+        """Compare-and-swap based on sequence and value."""
+        with self._write_lock:
+            if self._sequence == expected_seq and self._value == expected_value:
+                self._sequence += 1
+                self._value = new_value
+                self._sequence += 1
+                return True
+            return False
 
 
 class RWLock:
@@ -1699,20 +1736,20 @@ class Atom(Generic[T]):
                 seq = self._seqlock._sequence
                 old_value = self._seqlock._value
             
+            # 1. Read current state
+            expected_seq = self._seqlock._sequence
+            old_value = self._seqlock._value
+            
+            # 2. Compute new value
             new_value = fn(old_value, *args, **kwargs)
             
+            # 3. Validate new value
             if self._validator and not self._validator(new_value):  # type: ignore
                 raise ValidationException("Atom validation failed")
             
-            success = False
-            with self._seqlock._write_lock:
-                if self._seqlock._sequence == seq:
-                    self._seqlock._sequence += 1
-                    self._seqlock._value = new_value
-                    self._seqlock._sequence += 1
-                    success = True
-            
-            if success:
+            # 4. CAS Update
+            if self._seqlock.cas(expected_seq, old_value, new_value):
+                # 5. Notify watchers outside lock
                 self._notify_watchers(old_value, new_value)
                 return new_value
             
@@ -1946,7 +1983,8 @@ class PersistentHashMap(Generic[K, V]):
     __slots__ = ('_root', '_size', '_hash', '_json_encoder')
     
     BITS = 5
-    MASK = 31
+    MASK = (1 << BITS) - 1
+    BUCKET_SIZE = 8
     
     def __init__(
         self,
@@ -1975,13 +2013,13 @@ class PersistentHashMap(Generic[K, V]):
     def get(self, key: K, default: Optional[V] = None) -> Optional[V]:
         """Get value."""
         h = hash(key)
-        return self._get(self._root, h, key, default)
+        return self._get(self._root, h, key, default, 0)
     
-    def _get(self, node: Dict, h: int, key: K, default: Optional[V]) -> Optional[V]:
+    def _get(self, node: Dict[int, Any], h: int, key: K, default: Optional[V], shift: int = 0) -> Optional[V]:
         if not node:
             return default
         
-        idx = h & self.MASK
+        idx = (h >> shift) & self.MASK
         
         if idx not in node:
             return default
@@ -1989,7 +2027,7 @@ class PersistentHashMap(Generic[K, V]):
         entry = node[idx]
         
         if isinstance(entry, dict):
-            return self._get(entry, h >> self.BITS, key, default)
+            return self._get(entry, h, key, default, shift + self.BITS)
         
         if isinstance(entry, list):
             for k, v in entry:
@@ -2002,81 +2040,93 @@ class PersistentHashMap(Generic[K, V]):
     def assoc(self, key: K, value: V) -> 'PersistentHashMap[K, V]':
         """Associate key-value."""
         h = hash(key)
-        new_root, added = self._assoc(self._root, h, key, value)
+        new_root, added = self._assoc(self._root, h, key, value, 0)
         
         return PersistentHashMap(
             new_root,
             self._size + (1 if added else 0)
         )
     
-    def _assoc(self, node: Dict, h: int, key: K, value: V) -> Tuple[Dict, bool]:
-        idx = h & self.MASK
-        new_node = dict(node)
+    def _assoc(self, node: Dict[int, Any], h: int, key: K, value: V, shift: int = 0) -> Tuple[Dict[int, Any], bool]:
+        idx = (h >> shift) & self.MASK
+        new_node: Dict[int, Any] = dict(node)
         added = False
         
         if idx not in node:
-            new_node[idx] = [[key, value]]  # type: ignore
+            new_node[idx] = [[key, value]]
             added = True
-        else:  # type: ignore
+        else:
             entry = node[idx]
             
             if isinstance(entry, dict):
-                child, added = self._assoc(entry, h >> self.BITS, key, value)
-                new_node[idx] = child  # type: ignore
+                child, added = self._assoc(entry, h, key, value, shift + self.BITS)
+                new_node[idx] = child
             elif isinstance(entry, list):
-                new_list = []  # type: ignore
+                new_list = []
                 found = False
+                is_exact_hash = False
                 for k, v in entry:
                     if k == key:
                         new_list.append([key, value])
                         found = True
                     else:
                         new_list.append([k, v])
+                    if hash(k) == h:
+                        is_exact_hash = True
                 
                 if not found:
-                    new_list.append([key, value])
-                    added = True
-                
-                new_node[idx] = new_list  # type: ignore
+                    if is_exact_hash or len(entry) < self.BUCKET_SIZE:
+                        new_list.append([key, value])
+                        new_node[idx] = new_list
+                        added = True
+                    else:
+                        # Promote to sub-trie
+                        sub_node: Dict[int, Any] = {}
+                        for k, v in entry:
+                            sub_node, _ = self._assoc(sub_node, hash(k), k, v, shift + self.BITS)
+                        sub_node, added = self._assoc(sub_node, h, key, value, shift + self.BITS)
+                        new_node[idx] = sub_node
+                else:
+                    new_node[idx] = new_list
         
-        return new_node, added  # type: ignore
+        return new_node, added
     
     def dissoc(self, key: K) -> 'PersistentHashMap[K, V]':
         """Remove key."""
         h = hash(key)
-        new_root, removed = self._dissoc(self._root, h, key)
+        new_root, removed = self._dissoc(self._root, h, key, 0)
         
         return PersistentHashMap(
             new_root,
             self._size - (1 if removed else 0)
         )
     
-    def _dissoc(self, node: Dict, h: int, key: K) -> Tuple[Dict, bool]:
-        idx = h & self.MASK
+    def _dissoc(self, node: Dict[int, Any], h: int, key: K, shift: int = 0) -> Tuple[Dict[int, Any], bool]:
+        idx = (h >> shift) & self.MASK
         
         if idx not in node:
             return node, False
         
         entry = node[idx]
-        new_node = dict(node)
+        new_node: Dict[int, Any] = dict(node)
         removed = False
         
         if isinstance(entry, dict):
-            child, removed = self._dissoc(entry, h >> self.BITS, key)
+            child, removed = self._dissoc(entry, h, key, shift + self.BITS)
             if child:
-                new_node[idx] = child  # type: ignore
+                new_node[idx] = child
             else:
-                del new_node[idx]  # type: ignore
+                del new_node[idx]
         elif isinstance(entry, list):
-            new_list = [[k, v] for k, v in entry if k != key]  # type: ignore
+            new_list = [[k, v] for k, v in entry if k != key]
             if len(new_list) < len(entry):
                 removed = True
             if new_list:
-                new_node[idx] = new_list  # type: ignore
+                new_node[idx] = new_list
             else:
-                del new_node[idx]  # type: ignore
+                del new_node[idx]
         
-        return new_node, removed  # type: ignore
+        return new_node, removed
     
     def contains(self, key: K) -> bool:
         """Check if key exists."""
@@ -2087,7 +2137,7 @@ class PersistentHashMap(Generic[K, V]):
         """Iterate keys."""
         yield from self._iter_keys(self._root)
     
-    def _iter_keys(self, node: Dict) -> Iterator[K]:
+    def _iter_keys(self, node: Dict[int, Any]) -> Iterator[K]:
         for entry in node.values():
             if isinstance(entry, dict):
                 yield from self._iter_keys(entry)
@@ -2204,13 +2254,26 @@ class STMQueue(Generic[T]):
         deadline = time.time() + timeout if timeout is not None else None
         
         while True:
+            if self._maxsize > 0:
+                with self._cond:
+                    while len(self._items.deref()) >= self._maxsize:
+                        if self._closed.deref():
+                            return False
+                        if deadline is not None:
+                            rem = deadline - time.time()
+                            if rem <= 0:
+                                return False
+                            self._cond.wait(timeout=rem)
+                        else:
+                            self._cond.wait()
+                            
             @atomically
             def _do_put():
+                if self._closed.deref():
+                    return False
                 items = self._items.deref()
                 if self._maxsize > 0 and len(items) >= self._maxsize:
-                    if deadline is not None and time.time() >= deadline:
-                        return False
-                    return _QUEUE_RETRY  # retry flag
+                    return _QUEUE_RETRY
                 self._items.set(items + [item])
                 return True
                 
@@ -2221,17 +2284,6 @@ class STMQueue(Generic[T]):
                 return True
             elif result is False:
                 return False
-                
-            if deadline is not None:
-                remaining = deadline - time.time()  # type: ignore
-                if remaining <= 0:
-                    return False  # type: ignore
-                wait_time = remaining
-            else:
-                wait_time = None
-                
-            with self._cond:
-                self._cond.wait(timeout=wait_time)
     
     def get(self, timeout: Optional[float] = None) -> Optional[T]:
         """Get item from queue. Blocks until available or timeout."""
@@ -2526,8 +2578,10 @@ def dosync(
                             refs |= e.conflicting_refs
                         
                         backoff = coordinator.contention.get_backoff_for_retry(retry_count, refs)
-                        time.sleep(backoff)
+                        # Remove snapshot immediately to unblock HistoryManager GC before waiting
                         coordinator.unregister_transaction(tx.id)
+                        time.sleep(backoff)
+                        
                         tx._reset_for_retry()
                         coordinator.register_transaction(tx)
                     except Exception:
