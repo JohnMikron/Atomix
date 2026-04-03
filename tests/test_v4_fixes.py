@@ -30,33 +30,33 @@ from atomix_stm.core import (
 class TestBug1_VersionConsistency(unittest.TestCase):
     """Bug 1: Module docstring, __version__, and pyproject must all agree."""
 
-    def test_version_string_is_4_0_0(self):
-        """__version__ should be '4.0.0'."""
-        self.assertEqual(__version__, "4.0.0")
+    def test_version_string_is_4_1_0(self):
+        """__version__ should be '4.2.0'."""
+        self.assertEqual(__version__, "4.2.0")
 
     def test_init_version_matches(self):
         """atomix_stm.__version__ should match core.__version__."""
         import atomix_stm
-        self.assertEqual(atomix_stm.__version__, "4.0.0")
+        self.assertEqual(atomix_stm.__version__, "4.2.0")
 
     def test_docstring_contains_correct_version(self):
-        """Module docstring should reference v4.0.0."""
+        """Module docstring should reference v4.2.0."""
         import atomix_stm.core as core_module
         docstring = core_module.__doc__
         self.assertIsNotNone(docstring)
-        self.assertIn("4.0.0", docstring)
+        self.assertIn("4.2.0", docstring)
         self.assertNotIn("3.3.4", docstring)
         self.assertNotIn("3.3.5", docstring)
 
     def test_pyproject_version(self):
-        """pyproject.toml should contain version = '4.0.0'."""
+        """pyproject.toml should contain version = '4.2.0'."""
         pyproject_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "pyproject.toml"
         )
         if os.path.exists(pyproject_path):
             with open(pyproject_path, "r") as f:
                 content = f.read()
-            self.assertIn('version = "4.0.0"', content)
+            self.assertIn('version = "4.2.0"', content)
 
 
 class TestBug2_NoFloatingTypeIgnore(unittest.TestCase):

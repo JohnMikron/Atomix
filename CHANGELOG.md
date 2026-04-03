@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.2.0] - 2026-04-03
+
+### Fixed
+- **CRITICAL: `Ref._commit_value` race condition**: `old_value` was read before acquiring the lock — now safely read inside the lock.
+- **`Ref.read()` missing catch**: Now catches `TimeoutException` and falls back to lock-based read, matching `deref()` behavior.
+- **`HistoryManager.compute_max_history` rate calc**: Used fixed 60.0s divisor — now uses actual elapsed time from first access.
+- **`PersistentHashMap.__getitem__` None bug**: Previously raised `KeyError` for keys storing `None` — now uses sentinel-based detection.
+- **`Atom.compare_and_set` tight coupling**: Added `SeqLock.cas_value()` public API — no more direct access to `_write_lock`/`_value`/`_sequence`.
+- **`_cleanup()` silenced errors**: Now logs cleanup errors via `logger.debug()`.
+- **`QueueClosedException` not exported**: Added to `core.__all__` and `__init__.py`.
+- **`__init__.py` missing 14 exports**: Synced with full `core.__all__` (added `io`, `ensure`, `commute`, `Snapshot`, `get_snapshot_at`, `dump_stm_stats`, `get_history`, `run_concurrent`, `SpinLock`, `SeqLock`, `RWLock`, `ContentionManager`, `HistoryManager`, `STMReaper`).
+
+### Added
+- `SeqLock.cas_value()` — value-only CAS with identity/equality comparison.
+- New `tests/test_v42_fixes.py` regression test suite.
+
+## [4.1.0] - 2026-04-03
+
+### Fixed
+- **SeqLock.read() unbounded busy-wait**: Added `max_spins=10000` upper bound with `TimeoutException` to prevent infinite hang under extreme contention.
+- **_notify_watchers exception silencing**: Both `Ref._notify_watchers` and `Atom._notify_watchers` now log warnings via `logger.warning()` instead of silently swallowing errors.
+- **Ref.deref() broad except**: Now catches both `HistoryExpiredException` and `TimeoutException` explicitly, matching new SeqLock behavior.
+- **Atom.swap tight coupling**: Added `read_seq()` and `read_value()` public API to `SeqLock`. `Atom.swap()` now uses these instead of accessing private `_sequence`/`_value`.
+- **STMReaper graceful shutdown**: `STMReaper.stop()` now calls `self.join(timeout=2.0)` to wait for thread exit before logging.
+- **Ref.__del__ bare except**: Changed from `except:` to `except Exception:`.
+- **monitoring.py broken import**: Fixed `ConflictError` → `ConflictException` (correct public API name).
+- **Unnecessary `# type: ignore`**: Removed from `Ref.value` property, `Atom.reset()`, and `Atom.compare_and_set()`.
+
+### Added
+- `SeqLock.read_seq()` and `SeqLock.read_value()` public API methods.
+- New `tests/test_v41_fixes.py` regression test suite.
+
 ## [4.0.0] - 2026-04-03
 
 ### Fixed

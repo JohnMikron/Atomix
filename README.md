@@ -1,4 +1,4 @@
-# Atomix STM (v4.0.0) ⚛️
+# Atomix STM (v4.2.0) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.13+ (No-GIL Ready)**
 
@@ -140,7 +140,23 @@ print(val)  # "hello"
 
 ## 🆕 Changelog
 
-### v4.0.0 (Latest)
+### v4.2.0 (Latest)
+- **CRITICAL**: Fixed `Ref._commit_value` race condition — `old_value` read outside lock.
+- `Ref.read()` now catches `TimeoutException` like `deref()`.
+- `HistoryManager` rate calc uses actual elapsed time.
+- `PersistentHashMap.__getitem__` handles `None`-valued keys correctly.
+- `Atom.compare_and_set` decoupled via new `SeqLock.cas_value()` API.
+- `__init__.py` synced: 14 new exports including `QueueClosedException`.
+
+### v4.1.0
+- SeqLock.read() bounded spin with `max_spins=10000` — prevents infinite hang.
+- `_notify_watchers` now logs errors instead of silently swallowing.
+- `Ref.deref()` catches `TimeoutException` alongside `HistoryExpiredException`.
+- Added `read_seq()`/`read_value()` public API to `SeqLock` — decoupled `Atom.swap()`.
+- `STMReaper.stop()` joins thread for graceful shutdown.
+- Fixed `Ref.__del__` bare `except:`, monitoring.py broken import, and type: ignore cleanup.
+
+### v4.0.0
 - Fixed `Atom.swap()` double-read race condition (redundant write-lock pre-read removed).
 - Fixed nested `transaction()` depth corner case causing premature commits.
 - Fixed bare `except:` in `_cleanup()` — now uses `except Exception:`.

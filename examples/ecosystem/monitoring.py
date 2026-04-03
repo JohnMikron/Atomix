@@ -14,7 +14,7 @@ We show how to wrap `dosync` to track:
 import time
 import random
 import threading
-from atomix_stm import Atom, dosync, ConflictError
+from atomix_stm import Atom, dosync, ConflictException
 
 # Global metrics (In a real app, use Prometheus or OpenTelemetry)
 metrics = {

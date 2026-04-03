@@ -1,5 +1,5 @@
 """
-Atomix v4.0.0 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v4.2.0 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -13,14 +13,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 4.0.0
+Version: 4.2.0
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "4.0.0"
+__version__ = "4.2.0"
 
 import threading
 import time
@@ -475,15 +475,18 @@ class HistoryManager:
     def compute_max_history(self, ref_id: int) -> int:
         """Compute adaptive max history for Ref."""
         base = self._default_max
-        
+
         # Check access rate
         with self._patterns_lock:
             accesses = self._access_patterns.get(ref_id, [])
             if len(accesses) > 10:
-                recent_rate = len(accesses) / 60.0
-                if recent_rate > self._access_threshold:  # High access rate
-                    base = int(base * 1.5)
-        
+                # Use actual elapsed time, not a fixed 60s divisor
+                elapsed = time.time() - accesses[0]
+                if elapsed > 0:
+                    recent_rate = len(accesses) / elapsed
+                    if recent_rate > self._access_threshold:  # High access rate
+                        base = int(base * 1.5)
+
         # Check memory pressure
         if self._psutil_available:
             try:
@@ -498,7 +501,7 @@ class HistoryManager:
                     )
             except (ImportError, AttributeError):
                 self._psutil_available = False
-        
+
         return base
     
     def record_access(self, ref_id: int) -> None:
@@ -637,38 +640,70 @@ class SeqLock(Generic[T]):
         self._write_lock = threading.Lock()
     
     def read(self) -> T:
-        """Lock-free optimistic read."""
+        """Lock-free optimistic read with bounded spin."""
         spins: int = 0
+        max_spins: int = 10000
         while True:
             seq1 = self._sequence
-            
+
             # Odd sequence = write in progress
             if seq1 & 1:
                 spins += 1
+                if spins > max_spins:
+                    raise TimeoutException(
+                        f"SeqLock.read() exceeded {max_spins} spins — "
+                        f"possible writer starvation or deadlock"
+                    )
                 time.sleep(min(0.001, 1e-6 * (2 ** min(spins, 10))))
                 continue
-            
+
             value = self._value
             seq2 = self._sequence
-            
+
             if seq1 == seq2:
                 return value
-    
+
+            # Sequence changed during read, retry
+            spins += 1
+            if spins > max_spins:
+                raise TimeoutException(
+                    f"SeqLock.read() exceeded {max_spins} spins — "
+                    f"extreme write contention"
+                )
+
     def write(self, new_value: T) -> None:
         """Write with exclusive access."""
         with self._write_lock:
             self._sequence += 1  # Start write
             self._value = new_value
             self._sequence += 1  # End write
-    
+
     def get_version(self) -> int:
         """Get current sequence number."""
         return self._sequence
+
+    def read_seq(self) -> int:
+        """Public accessor for current sequence number."""
+        return self._sequence
+
+    def read_value(self) -> T:
+        """Public accessor for current value (unsynchronized snapshot)."""
+        return self._value
 
     def cas(self, expected_seq: int, expected_value: T, new_value: T) -> bool:
         """Compare-and-swap based on sequence and value."""
         with self._write_lock:
             if self._sequence == expected_seq and self._value == expected_value:
+                self._sequence += 1
+                self._value = new_value
+                self._sequence += 1
+                return True
+            return False
+
+    def cas_value(self, expected_value: T, new_value: T) -> bool:
+        """Value-only CAS: compare by identity or equality, swap if match."""
+        with self._write_lock:
+            if self._value is expected_value or self._value == expected_value:
                 self._sequence += 1
                 self._value = new_value
                 self._sequence += 1
@@ -1025,6 +1060,7 @@ class STMReaper(threading.Thread):
     def stop(self) -> None:
         """Stop reaper gracefully."""
         self._running = False
+        self.join(timeout=2.0)
         logger.info("STM Reaper stopped")
 
 
@@ -1474,19 +1510,19 @@ class Ref(Generic[T]):
     
     def _commit_value(self, value: T, version: VersionStamp) -> Callable[[], None]:
         """Commit new value."""
-        old_value = self._value
-        
         with self._lock:
+            old_value = self._value  # Read old_value INSIDE lock to avoid race
+
             if self._min_history > 0 or len(self._history) > 0:
                 self._history.append((self._version, self._value))
-            
+
             self._value = value
             self._version = version
             self._access_time = time.time()
-            
+
             retention_bound = self._coordinator.history.get_retention_bound()
             self._trim_history_unlocked(retention_bound)
-        
+
         self._seqlock.write(value)  # type: ignore
         return lambda: self._notify_watchers(old_value, value)
     
@@ -1524,14 +1560,12 @@ class Ref(Generic[T]):
         """Notify watchers."""
         with self._watcher_lock:
             watchers = list(self._watchers.values())
-        
+
         for watcher in watchers:
             try:
                 watcher(old_value, new_value)
-            except Exception:
-                pass
-
-
+            except Exception as e:
+                logger.warning(f"Ref watcher error: {e}")
 
     
     # Public API
@@ -1542,11 +1576,11 @@ class Ref(Generic[T]):
         if tx is None:
             try:
                 return self._seqlock.read()
-            except HistoryExpiredException:
+            except (HistoryExpiredException, TimeoutException):
                 return self._read_raw()
         return tx._read_ref(self)  # type: ignore
-    
-    @property  # type: ignore
+
+    @property
     def value(self) -> T:
         """Get the current value."""
         return self.deref()
@@ -1558,7 +1592,10 @@ class Ref(Generic[T]):
     
     def read(self) -> T:
         """Read without transaction (lock-free)."""
-        return self._seqlock.read()
+        try:
+            return self._seqlock.read()
+        except TimeoutException:
+            return self._read_raw()
     
     def set(self, value: T) -> None:
         """Set value in transaction."""
@@ -1686,7 +1723,7 @@ class Ref(Generic[T]):
         """Cleanup."""
         try:
             self._coordinator.unregister_ref(self._identity.id)
-        except:
+        except Exception:
             pass
 
 
@@ -1721,7 +1758,7 @@ class Atom(Generic[T]):
     
     def reset(self, new_value: T) -> T:
         """Reset value."""
-        if self._validator and not self._validator(new_value):  # type: ignore
+        if self._validator and not self._validator(new_value):
             raise ValidationException("Atom validation failed")
         old_value = self._seqlock.read()
         self._seqlock.write(new_value)
@@ -1732,8 +1769,8 @@ class Atom(Generic[T]):
         """Atomic swap using lock-free CAS."""
         retries = 0
         while True:
-            # 1. Lock-free optimistic read
-            expected_seq = self._seqlock._sequence
+            # 1. Lock-free optimistic read via public API
+            expected_seq = self._seqlock.read_seq()
 
             # Odd sequence = write in progress, spin
             if expected_seq & 1:
@@ -1741,7 +1778,7 @@ class Atom(Generic[T]):
                 time.sleep(min(0.001, 1e-6 * (2 ** min(retries, 10))))
                 continue
 
-            old_value = self._seqlock._value
+            old_value = self._seqlock.read_value()
 
             # 2. Compute new value
             new_value = fn(old_value, *args, **kwargs)
@@ -1766,31 +1803,24 @@ class Atom(Generic[T]):
             time.sleep(backoff * (0.5 + random.random()))
 
     def compare_and_set(self, expected: T, new_value: T) -> bool:
-        """CAS operation."""
-        if self._validator and not self._validator(new_value):  # type: ignore
+        """CAS operation via public SeqLock API."""
+        if self._validator and not self._validator(new_value):
             raise ValidationException("Atom validation failed")
-        success = False
-        with self._seqlock._write_lock:
-            if self._seqlock._value is expected or self._seqlock._value == expected:
-                self._seqlock._sequence += 1
-                self._seqlock._value = new_value
-                self._seqlock._sequence += 1
-                success = True
+        success = self._seqlock.cas_value(expected, new_value)
         if success:
             self._notify_watchers(expected, new_value)
-            return True
-        return False
+        return success
     
     def _notify_watchers(self, old_value: T, new_value: T) -> None:
         """Notify watchers."""
         with self._watcher_lock:
             watchers = list(self._watchers.values())
-        
+
         for watcher in watchers:
             try:
                 watcher(old_value, new_value)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Atom watcher error: {e}")
     
     def add_watcher(self, key: str, watcher: Callable[[T, T], None]) -> 'Atom[T]':
         """Add watcher."""
@@ -2008,10 +2038,11 @@ class PersistentHashMap(Generic[K, V]):
         return self._size > 0
     
     def __getitem__(self, key: K) -> V:
-        result = self.get(key)
-        if result is None:
+        _sentinel = object()
+        result = self.get(key, default=_sentinel)  # type: ignore
+        if result is _sentinel:
             raise KeyError(key)
-        return result
+        return result  # type: ignore
     
     def get(self, key: K, default: Optional[V] = None) -> Optional[V]:
         """Get value."""
@@ -2820,8 +2851,8 @@ def _cleanup():
         if hasattr(STMAgent, '_agent_pool'):
             STMAgent._agent_pool.shutdown(wait=False)  # type: ignore
         logger.info("STM cleanup complete")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Cleanup error (safe to ignore): {e}")
 
 atexit.register(_cleanup)
 
@@ -2891,6 +2922,7 @@ __all__ = [
     'ValidationException',
     'HistoryExpiredException',
     'InvariantViolationException',
+    'QueueClosedException',
 ]
 
 
