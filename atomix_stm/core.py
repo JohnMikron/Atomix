@@ -1,5 +1,5 @@
 """
-Atomix v3.3.4 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v4.0.0 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -13,14 +13,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 3.3.4
+Version: 4.0.0
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "3.3.5"
+__version__ = "4.0.0"
 
 import threading
 import time
@@ -277,7 +277,7 @@ class ContentionManager:
         self._enable_priority = enable_priority
         self._throughput_window = throughput_window
         
-        self._contention_scores: Dict[int, int] = defaultdict(int)  # type: ignore
+        self._contention_scores: Dict[int, int] = defaultdict(int)  # type: ignore[assignment]
         self._contention_lock = threading.RLock()
         
         self._global_contention = 0
@@ -442,7 +442,7 @@ class HistoryManager:
         self._active_snapshots: Dict[int, Tuple[VersionStamp, float]] = {}
         self._snapshots_lock = threading.RLock()
         
-        self._access_patterns: Dict[int, List[float]] = defaultdict(list)  # type: ignore
+        self._access_patterns: Dict[int, List[float]] = defaultdict(list)  # type: ignore[assignment]
         self._patterns_lock = threading.RLock()
         
         # Metrics
@@ -1728,36 +1728,39 @@ class Atom(Generic[T]):
         self._notify_watchers(old_value, new_value)
         return new_value
     
-    def swap(self, fn: Callable[[T], T], *args, **kwargs) -> T:  # type: ignore
-        """Atomic swap."""
+    def swap(self, fn: Callable[[T], T], *args, **kwargs) -> T:
+        """Atomic swap using lock-free CAS."""
         retries = 0
         while True:
-            with self._seqlock._write_lock:
-                seq = self._seqlock._sequence
-                old_value = self._seqlock._value
-            
-            # 1. Read current state
+            # 1. Lock-free optimistic read
             expected_seq = self._seqlock._sequence
+
+            # Odd sequence = write in progress, spin
+            if expected_seq & 1:
+                retries += 1
+                time.sleep(min(0.001, 1e-6 * (2 ** min(retries, 10))))
+                continue
+
             old_value = self._seqlock._value
-            
+
             # 2. Compute new value
             new_value = fn(old_value, *args, **kwargs)
-            
+
             # 3. Validate new value
-            if self._validator and not self._validator(new_value):  # type: ignore
+            if self._validator and not self._validator(new_value):
                 raise ValidationException("Atom validation failed")
-            
+
             # 4. CAS Update
             if self._seqlock.cas(expected_seq, old_value, new_value):
                 # 5. Notify watchers outside lock
                 self._notify_watchers(old_value, new_value)
                 return new_value
-            
+
             # CAS failure backoff
             retries += 1
             if retries > 1000:
-                 raise CommitException("Atom.swap exceeded max retries (1000)")
-            
+                raise CommitException("Atom.swap exceeded max retries (1000)")
+
             # Exponential backoff with jitter
             backoff = min(0.1, 0.0001 * (2 ** min(retries, 10)))
             time.sleep(backoff * (0.5 + random.random()))
@@ -1894,15 +1897,15 @@ class PersistentVector(Generic[T]):
             raise IndexError("Cannot pop empty vector")
         return PersistentVector(self._items[:-1], self._shift, self._json_encoder)  # type: ignore
     
-    def rest(self) -> 'PersistentVector[T]':  # type: ignore
+    def rest(self) -> 'PersistentVector[T]':
         """All but first."""
         if len(self._items) <= 1:
-            return PersistentVector.empty()  # type: ignore
-        return PersistentVector(self._items[1:], self._shift, self._json_encoder)  # type: ignore
-  # type: ignore
-    def _slice(self, start: int, end: int) -> 'PersistentVector[T]':  # type: ignore
+            return PersistentVector.empty()
+        return PersistentVector(self._items[1:], self._shift, self._json_encoder)
+
+    def _slice(self, start: int, end: int) -> 'PersistentVector[T]':
         """Slice."""
-        return PersistentVector(self._items[start:end], self._shift, self._json_encoder)  # type: ignore
+        return PersistentVector(self._items[start:end], self._shift, self._json_encoder)
     
     def map(self, fn: Callable[[T], R]) -> 'PersistentVector[R]':  # type: ignore
         """Map function."""
@@ -2303,7 +2306,6 @@ class STMQueue(Generic[T]):
                 item = items[0]
                 self._items.set(items[1:])  # type: ignore
                 return item
-                # type: ignore
             result = _do_get()
             if result is not _QUEUE_RETRY:
                 with self._cond:
@@ -2504,23 +2506,26 @@ def transaction(
     """
     coordinator = TransactionCoordinator()
     old_tx = _get_current_transaction()
-    
-    tx = old_tx or Transaction(
+
+    # If already inside a transaction, reuse it without touching _depth
+    if old_tx:
+        yield old_tx
+        return
+
+    tx = Transaction(
         coordinator,
         timeout=timeout,
         max_retries=max_retries,
         label=label
     )
     _set_current_transaction(tx)
-    if not old_tx:
-        coordinator.register_transaction(tx)
-    
+    coordinator.register_transaction(tx)
+
     try:
         with tx:
             yield tx
     finally:
-        if not old_tx:
-            coordinator.unregister_transaction(tx.id)
+        coordinator.unregister_transaction(tx.id)
         _set_current_transaction(old_tx)
 
 
@@ -2687,7 +2692,7 @@ def io(func: Callable[..., R]) -> Callable[..., R]:
 
 
 # ============================================================================
-# Snapshot and History  # type: ignore
+# Snapshot and History
 # ============================================================================
 
 @dataclass
@@ -2766,7 +2771,7 @@ def run_concurrent(
 
 
 # ============================================================================
-# Diagnostics and Monitoring  # type: ignore
+# Diagnostics and Monitoring
 # ============================================================================
 
 def get_stm_stats() -> Dict[str, Any]:
@@ -2815,15 +2820,14 @@ def _cleanup():
         if hasattr(STMAgent, '_agent_pool'):
             STMAgent._agent_pool.shutdown(wait=False)  # type: ignore
         logger.info("STM cleanup complete")
-    except:  # type: ignore
+    except Exception:
         pass
-  # type: ignore
 
-atexit.register(_cleanup)  # type: ignore
+atexit.register(_cleanup)
 
 
 # ============================================================================
-# Public API  # type: ignore
+# Public API
 # ============================================================================
 
 __all__ = [

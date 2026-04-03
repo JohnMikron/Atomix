@@ -1,4 +1,4 @@
-# Atomix STM (v3.3.5) ⚛️
+# Atomix STM (v4.0.0) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.13+ (No-GIL Ready)**
 
@@ -140,97 +140,47 @@ print(val)  # "hello"
 
 ## 🆕 Changelog
 
-### v3.3.4 (Latest)
-- Removed all stray/floating `# type: ignore` comments across the codebase.
-- Eliminated `old_tx`/`existing_tx` redundant alias in `dosync()`.
-- Fixed `TestSTMAvanced` → `TestSTMAdvanced` class name typo.
-- Removed `dosync` double-wrapping in `examples/basic_usage.py`.
-- Removed legacy `setup.py` in favor of `pyproject.toml`.
-- Aligned Python version references to 3.13+ everywhere.
+### v4.0.0 (Latest)
+- Fixed `Atom.swap()` double-read race condition (redundant write-lock pre-read removed).
+- Fixed nested `transaction()` depth corner case causing premature commits.
+- Fixed bare `except:` in `_cleanup()` — now uses `except Exception:`.
+- Removed all floating `# type: ignore` comments from section headers and function gaps.
+- Synchronized module docstring, `__version__`, and `pyproject.toml` to v4.0.0.
+- Added comprehensive regression test suite for all v4 fixes.
+
+### v3.3.5
+- `SeqLock.read()` GIL safety with exponential backoff.
+- `VersionStamp` ordering fix (logical_time over physical_time).
+- `Atom.swap()` CAS via `SeqLock.cas()`.
+- `STMQueue` busy-wait elimination.
+- `dosync` snapshot drift fix.
+- `PersistentHashMap` sub-trie collision handling.
+
+### v3.3.4
+- Removed stray `# type: ignore` comments.
+- Fixed `TestSTMAvanced` class name typo.
+- Removed legacy `setup.py`.
 
 ### v3.3.3
-- Corrected misindented `# type: ignore` comments.
-- Cleaned up redundant code patterns and duplicate imports.
+- Corrected misindented comments and redundant code patterns.
 - Fixed late-binding bug in example producer logic.
-- Automated CI/CD workflows for regression testing.
+- Added CI/CD workflows.
 
 ### v3.3.2
 - Critical fix for `dosync` nested transaction context state.
-- Resolved `Atom.swap` data race in No-GIL environments (PEP 703).
-- Fixed `SpinLock` reentrancy deadlock via `RLock`.
-- Added `PersistentHashMap` `sentinel` for `None` detection.
+- Resolved `Atom.swap` data race in No-GIL environments.
+- Fixed `SpinLock` reentrancy deadlock.
 
 ### v3.3.1
-- Fixed `dosync` context restoration for nested transactions.
-- Implemented exponential backoff with jitter in `Atom.swap`.
-- Lazy-loaded `psutil` for reduced import overhead.
-- Renamed internal `_transaction` to public `transaction` context manager.
+- Fixed `dosync` context restoration.
+- Exponential backoff in `Atom.swap`.
+- Lazy-loaded `psutil`.
+- Renamed `_transaction` to public `transaction`.
 
 ### v3.3.0
-- Major overhaul: 12 critical bug fixes and architectural improvements.
-- Added `py.typed` marker for PEP 561 compliance.
-- New documentation: `TUTORIAL.md`, `COMPARISON.md`, ecosystem examples.
-
-### v3.2.7
-- Fixed critical `TypeError` initialized during deferred evaluations in `_commute_ref`.
-- Removed duplicated `retry_count` overriding loops within `dosync()`.
-- Added standard `QueueClosedException` exception classes for clean queue drains.
-- Enforced strict validation checking on nested immediate-returns inside `dosync()`.
-- Eradicated writer starvation dead-locks internally in `RWLock` via pending barriers.
-- Hardened data-race conditions returning stale queue values during thread polling in `STMAgent.await_value()`.
-
-### v3.2.6 (2026-03-10)
-- Fixed double `unregister_transaction` logic bug inside `dosync()`.
-- Thread leak prevention via Race Condition Lock inside `STMAgent._agent_pool`.
-- Optimised STM latency via removal of 2nd read-set validation redundantly blocking commit paths.
-- Removed deadlocks triggering during recursive evaluations in `_commute_ref()`.
-- Unbounded queue loops blocked forever via timeouts fixed in `STMQueue.put()`.
-- Performance overhead removed on `Ref.set()` context wrapping.
-- Unbounded busy-wait spin loops capped implicitly inside `Atom.swap()`.
-- Clean shutdown for unused background threads appended to `atexit`.
-
-### v3.2.5 (2026-03-10)
-- Fixed relative markdown links inside PyPI release details so internal documents are clickable.
-- Added absolute GitHub repositories inside package metadata configurations.
-
-### v3.2.4 (2026-03-10)
-- Fixed module-level `commute()` missing return mappings.
-- Re-routed unexpected `TransactionAbortedException` skips.
-- Nested transaction `@atomically` behaviors stabilized.
-- Optimized thread management under the `STMAgent` framework using global `ThreadPoolExecutors`.
-- Removed redundant history checks and context wrappers.
-
-### v3.2.3 (2026-03-10)
-- Removed duplicate namespace definitions for `retry` and `commute`.
-- Fixed `dosync` re-registration logic so that snapshot correctly updates over retries.
-- Replaced `transaction()` wrappers with strict `@atomically` scopes across queue queries.
-- Cleaned up obsolete checks and explicit imports.
-
-### v3.2.2 (2026-03-10)
-- Fixed missing parameter mappings (`alter`, `commute`, `atom`, `ref`, etc.) to top level.
-- Replaced custom logic with resilient `threading.RLock()` for the `RWLock`.
-- Fixed missing sentinels exceptions in `STMQueue`.
-- Fixed multiple ABA transaction resets that were looping unnecessarily.
-- Fixed properties bindings and missing imports from modular components.
-
-### v3.2.0 (2026-03-03) — Deep Bug Fix Release
-
-**Bug Fixes:**
-- `STMAgent.send()` — fixed invalid use of `dosync()` as context manager
-- `Atom.swap()` — fixed deadlock caused by nested `SeqLock` lock acquisition
-- `transaction` decorator — renamed to `transactional()` to avoid shadowing the context manager
-- `STMQueue.get()` — fixed `retry()` being called outside a transaction scope
-- `Ref.set()`, `Ref.alter()`, `Ref.commute()` — fixed broken `dosync(fn)()` double-call pattern
-
-**New Features:**
-- `Atom.compare_and_set(old, new)` — atomic CAS operation
-- `STMAgent.errors` property — inspect errors from async agent actions
-- `STMAgent.clear_errors()` — clear accumulated errors
-- `STMAgent.await_value()` — now properly waits for all pending actions (semaphore-based)
-- `CommitException` and `TransactionAbortedException` exported from package
-
-### v3.1.6
-- Heavy Metal Atomicity, Adaptive Reaper, Level Bloat Fix, Robust History Retention
+- Major overhaul: 12 critical bug fixes.
+- PEP 561 compliance (`py.typed`).
+- New docs and ecosystem examples.
 
 ---
 

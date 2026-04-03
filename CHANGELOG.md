@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.0.0] - 2026-04-03
+
+### Fixed
+- **Module docstring version mismatch**: Docstring incorrectly said v3.3.4 while `__version__` was 3.3.5. All now consistently say 4.0.0.
+- **Floating `# type: ignore` comments**: Removed 5 misplaced `# type: ignore` comments that were outside function bodies or inside section header comments (between `rest()`/`_slice()`, in `Snapshot and History`, `Diagnostics and Monitoring`, `Public API` headers, and after `_cleanup()`).
+- **Bare `except:` in `_cleanup()`**: Changed to `except Exception:` so `SystemExit` and `KeyboardInterrupt` propagate correctly during interpreter shutdown.
+- **`Atom.swap()` double-read race condition**: Removed redundant `with self._seqlock._write_lock` block that acquired the write lock, read seq/value, then immediately re-read them outside the lock — creating a race condition. Now uses a clean lock-free optimistic read with odd-sequence spin-wait before CAS.
+- **Nested `transaction()` depth corner case**: When an outer transaction already exists, `transaction()` now yields the existing transaction directly instead of entering `with tx:` (which incremented `_depth` and caused a premature commit when the inner context exited).
+- **Unnecessary `# type: ignore` on `defaultdict` assignments**: Changed bare `# type: ignore` to targeted `# type: ignore[assignment]` on `ContentionManager._contention_scores` and `HistoryManager._access_patterns` for Pyre compatibility.
+
+### Changed
+- **Version bump to 4.0.0** across `core.py`, `__init__.py`, `pyproject.toml`, and all documentation.
+- Removed `# type: ignore` from `atexit.register(_cleanup)` call.
+
+### Added
+- New `tests/test_v4_fixes.py` covering all 6 bug fixes with targeted regression tests.
+
 ## [3.3.5] - 2026-03-17
 
 ### Fixed

@@ -31,7 +31,7 @@ from .core import (
     InvariantViolationException
 )
 
-__version__ = "3.3.5"
+__version__ = "4.0.0"
 __author__ = "Atomix STM Maintainers"
 __license__ = "GPLv3 / Commercial"
 
