@@ -1,8 +1,8 @@
 """
-Atomix v4.2.0 — Regression Test Suite for V4.1 Hardening Fixes
+Atomix — Regression Test Suite for V4.1 Hardening Fixes
 ================================================================
 
-Covers all fixes introduced in v4.2.0:
+Covers all fixes introduced in v4.1.0:
 1. SeqLock.read() bounded spin (max_spins upper bound)
 2. _notify_watchers logs errors instead of silencing
 3. Ref.deref() catches TimeoutException
@@ -191,18 +191,18 @@ class TestFix6_RefDelNoBarExcept(unittest.TestCase):
 
 
 class TestVersionConsistency(unittest.TestCase):
-    """Version should be 4.2.0 everywhere."""
+    """Version should be current across all files."""
 
-    def test_version_is_4_1_0(self):
-        self.assertEqual(__version__, "4.2.0")
+    def test_version_is_current(self):
+        self.assertEqual(__version__, "4.3.0")
 
     def test_init_version(self):
         import atomix_stm
-        self.assertEqual(atomix_stm.__version__, "4.2.0")
+        self.assertEqual(atomix_stm.__version__, "4.3.0")
 
     def test_docstring_version(self):
         import atomix_stm.core as core_module
-        self.assertIn("4.2.0", core_module.__doc__)
+        self.assertIn("4.3.0", core_module.__doc__)
 
 
 if __name__ == '__main__':

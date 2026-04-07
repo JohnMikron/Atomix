@@ -1,5 +1,5 @@
 """
-Atomix v4.2.0 - Production-Grade Software Transactional Memory for Python 3.13+
+Atomix v4.3.0 - Production-Grade Software Transactional Memory for Python 3.13+
 =============================================================================
 
 A state-of-the-art STM library bringing Haskell/Clojure-style concurrency
@@ -13,14 +13,14 @@ Features:
 - JSON serialization support
 - Async/await support for Python 3.13+
 
-Version: 4.2.0
+Version: 4.3.0
 Author: Atomix STM Project
 License: GPLv3 / Commercial
 """
 
 from __future__ import annotations
 
-__version__ = "4.2.0"
+__version__ = "4.3.0"
 
 import threading
 import time
@@ -642,7 +642,7 @@ class SeqLock(Generic[T]):
     def read(self) -> T:
         """Lock-free optimistic read with bounded spin."""
         spins: int = 0
-        max_spins: int = 10000
+        max_spins: int = 100000
         while True:
             seq1 = self._sequence
 
@@ -815,6 +815,7 @@ class TransactionCoordinator:
         # Reaper thread
         self._reaper = STMReaper(self, interval=5.0)  # type: ignore
         self._reaper.start()  # type: ignore
+        atexit.register(self._reaper.stop)  # Ensure graceful shutdown on exit
         
         # Statistics
         self._stats_lock = threading.RLock()  # type: ignore
@@ -850,6 +851,7 @@ class TransactionCoordinator:
                 self._reaper.stop()
             self._reaper = STMReaper(self, interval=5.0)
             self._reaper.start()
+            atexit.register(self._reaper.stop)
     
     def new_transaction_id(self) -> int:
         """Generate transaction ID."""

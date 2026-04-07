@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.3.0] - 2026-04-03
+
+### Fixed
+- **`STMReaper` atexit.register**: Reaper thread now registered with `atexit` on creation and reset — ensures graceful shutdown on SIGTERM/crash.
+- **`SeqLock.read()` max_spins 10000→100000**: Prevents false `TimeoutException` under legitimate high-contention (50+ threads).
+- **`Atom.swap()` max retries**: Added explicit test verifying `CommitException` is raised when retries exceeded.
+- **`test_v41_fixes.py` docstring**: Fixed misleading docstring that said "v4.2.0" but covers v4.1.0 fixes.
+- **`test_v41_fixes.py` naming**: Fixed `test_version_is_4_1_0` → `test_version_is_current` to avoid version confusion.
+- **`monitoring.py` import test**: Added dedicated test verifying the monitoring module imports without error.
+- **Full `_notify_watchers` audit**: Verified all 6 call sites in core.py use proper `logger.warning()` — zero silent `except: pass`.
+
 ## [4.2.0] - 2026-04-03
 
 ### Fixed

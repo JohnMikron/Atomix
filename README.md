@@ -1,4 +1,4 @@
-# Atomix STM (v4.2.0) ⚛️
+# Atomix STM (v4.3.0) ⚛️
 
 **Production-grade Software Transactional Memory for Python 3.13+ (No-GIL Ready)**
 
@@ -140,7 +140,13 @@ print(val)  # "hello"
 
 ## 🆕 Changelog
 
-### v4.2.0 (Latest)
+### v4.3.0 (Latest)
+- `STMReaper` registered with `atexit` for graceful SIGTERM/crash shutdown.
+- `SeqLock.read()` max_spins 10000→100000 (prevents false TimeoutException at 50+ threads).
+- Full `_notify_watchers` audit: all 6 call sites verified clean.
+- Test cleanup: docstrings, naming, monitoring import test.
+
+### v4.2.0
 - **CRITICAL**: Fixed `Ref._commit_value` race condition — `old_value` read outside lock.
 - `Ref.read()` now catches `TimeoutException` like `deref()`.
 - `HistoryManager` rate calc uses actual elapsed time.

@@ -347,7 +347,7 @@ class TestVersionCheck(unittest.TestCase):
     def test_version(self):
         """Test version string."""
         import atomix_stm
-        self.assertEqual(atomix_stm.__version__, "4.2.0")
+        self.assertEqual(atomix_stm.__version__, "4.3.0")
 
 
 class TestBug2_VersionStampOrdering(unittest.TestCase):

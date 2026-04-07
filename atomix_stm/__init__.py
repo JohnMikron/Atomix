@@ -46,7 +46,7 @@ from .core import (
     QueueClosedException,
 )
 
-__version__ = "4.2.0"
+__version__ = "4.3.0"
 __author__ = "Atomix STM Maintainers"
 __license__ = "GPLv3 / Commercial"
 
