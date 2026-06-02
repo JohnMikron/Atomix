@@ -33,7 +33,7 @@ class CommuteEntry(Generic[T]):
 
 
 class Transaction:
-    """STM transaction with per-ref locking bug and simulated context switch to force failures."""
+    """STM transaction coordinating commits under a global commit lock for MVCC consistency."""
     def __init__(
         self,
         coordinator: Any,
@@ -118,7 +118,7 @@ class Transaction:
                 raise STMException(f"Cannot commit in state {self._state.name}")
             self._state = TransactionState.PREPARING
 
-        # Prepare under global lock
+        # Acquire the global commit_lock for the entire commit sequence
         with self._coordinator._commit_lock:
             success, conflicts = self._prepare_inside_lock()
             if not success and conflicts:
@@ -127,17 +127,14 @@ class Transaction:
             
             self._state = TransactionState.COMMITTING
 
-        # FORCE RACE CONDITION: yield execution to allow concurrent prepares to pass check
-        time.sleep(0.0001)
-
-        # Applying commits in parallel outside _commit_lock
-        commit_version = self._coordinator.create_version_stamp(self.id)
-        notifications = []
-        for ref_id, entry in self._write_log.items():
-            ref = self._coordinator.get_ref(ref_id)
-            if ref is not None:
-                notif_fn = ref._commit_value(entry.new_value, commit_version)
-                notifications.append(notif_fn)
+            # Applying commits inside the global commit_lock to ensure atomic stamp application
+            commit_version = self._coordinator.create_version_stamp(self.id)
+            notifications = []
+            for ref_id, entry in self._write_log.items():
+                ref = self._coordinator.get_ref(ref_id)
+                if ref is not None:
+                    notif_fn = ref._commit_value(entry.new_value, commit_version)
+                    notifications.append(notif_fn)
 
         self._state = TransactionState.COMMITTED
         for notif in notifications:
