@@ -16,6 +16,7 @@ from .transaction import Transaction
 from .api import transaction, dosync, atomically, alter, write, read
 from .locks import SeqLock, SpinLock, RWLock
 from .persistent import PersistentVector, PersistentHashMap
+from .primitives import STMQueue, STMAgent, STMVar
 
 __version__ = "4.3.0"
 __author__ = "John Mikron"
@@ -49,4 +50,7 @@ __all__ = [
     "RWLock",
     "PersistentVector",
     "PersistentHashMap",
+    "STMQueue",
+    "STMAgent",
+    "STMVar",
 ]
