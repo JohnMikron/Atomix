@@ -33,7 +33,7 @@ class CommuteEntry(Generic[T]):
 
 
 class Transaction:
-    """STM transaction implementing optimistic concurrency with per-ref locking bug."""
+    """STM transaction with per-ref locking bug and simulated context switch to force failures."""
     def __init__(
         self,
         coordinator: Any,
@@ -118,8 +118,7 @@ class Transaction:
                 raise STMException(f"Cannot commit in state {self._state.name}")
             self._state = TransactionState.PREPARING
 
-        # BUG: Check-then-act race condition. We hold coordinator commit lock during prepare,
-        # but release it before applying commits under per-ref locks.
+        # Prepare under global lock
         with self._coordinator._commit_lock:
             success, conflicts = self._prepare_inside_lock()
             if not success and conflicts:
@@ -127,6 +126,9 @@ class Transaction:
                 raise ConflictException(f"Transaction conflicted on refs {conflicts}", conflicting_refs=conflicts)
             
             self._state = TransactionState.COMMITTING
+
+        # FORCE RACE CONDITION: yield execution to allow concurrent prepares to pass check
+        time.sleep(0.0001)
 
         # Applying commits in parallel outside _commit_lock
         commit_version = self._coordinator.create_version_stamp(self.id)
