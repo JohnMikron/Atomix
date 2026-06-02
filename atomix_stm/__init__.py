@@ -15,6 +15,7 @@ from .ref import Ref, RefIdentity, Atom
 from .transaction import Transaction
 from .api import transaction, dosync, atomically, alter, write, read
 from .locks import SeqLock, SpinLock, RWLock
+from .persistent import PersistentVector, PersistentHashMap
 
 __version__ = "4.3.0"
 __author__ = "John Mikron"
@@ -46,4 +47,6 @@ __all__ = [
     "SeqLock",
     "SpinLock",
     "RWLock",
+    "PersistentVector",
+    "PersistentHashMap",
 ]
