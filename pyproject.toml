@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atomix-stm"
+version = "4.3.0"
+authors = [
+  { name = "John Mikron", email = "johnmikron@users.noreply.github.com" },
+]
+description = "Atomix: Software Transactional Memory for Python 3.13+"
+readme = "README.md"
+requires-python = ">=3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Intended Audience :: Developers",
+]
+dependencies = []
+
+[project.urls]
+"Homepage" = "https://github.com/JohnMikron/Atomix"
+"Source" = "https://github.com/JohnMikron/Atomix"
+"Bug Tracker" = "https://github.com/JohnMikron/Atomix/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["atomix_stm*"]
