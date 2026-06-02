@@ -11,6 +11,7 @@ from .exceptions import (
     QueueClosedException,
 )
 from .versioning import TransactionState, VersionStamp
+from .ref import Ref, RefIdentity
 
 __version__ = "4.3.0"
 __author__ = "John Mikron"
@@ -29,4 +30,6 @@ __all__ = [
     "QueueClosedException",
     "TransactionState",
     "VersionStamp",
+    "Ref",
+    "RefIdentity",
 ]
