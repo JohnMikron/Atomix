@@ -12,6 +12,8 @@ from .exceptions import (
 )
 from .versioning import TransactionState, VersionStamp
 from .ref import Ref, RefIdentity
+from .transaction import Transaction
+from .api import transaction, dosync, atomically, alter, write, read
 
 __version__ = "4.3.0"
 __author__ = "John Mikron"
@@ -32,4 +34,11 @@ __all__ = [
     "VersionStamp",
     "Ref",
     "RefIdentity",
+    "Transaction",
+    "transaction",
+    "dosync",
+    "atomically",
+    "alter",
+    "write",
+    "read",
 ]

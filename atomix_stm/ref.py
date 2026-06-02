@@ -1,7 +1,7 @@
 import threading
 import time
-from typing import Callable, Generic, Optional, TypeVar, Tuple, List
-from .versioning import VersionStamp
+from typing import Callable, Generic, Optional, TypeVar, Tuple, List, Any
+from .versioning import VersionStamp, _get_current_transaction
 from .exceptions import ValidationException, InvariantViolationException, HistoryExpiredException
 from .coordinator import TransactionCoordinator
 
@@ -120,8 +120,10 @@ class Ref(Generic[T]):
                 pass
 
     def deref(self) -> T:
-        # Fallback to direct read for now before transaction context is built
-        return self._read_raw()
+        tx = _get_current_transaction()
+        if tx is None:
+            return self._read_raw()
+        return tx._read_ref(self)
 
     @property
     def value(self) -> T:
@@ -132,7 +134,11 @@ class Ref(Generic[T]):
         self.set(new_value)
 
     def set(self, value: T) -> None:
-        self.reset(value)
+        tx = _get_current_transaction()
+        if tx is None:
+            self.reset(value)
+            return
+        tx._write_ref(self, value)
 
     def reset(self, value: T) -> T:
         self._validate(value)
@@ -143,8 +149,21 @@ class Ref(Generic[T]):
         return value
 
     def alter(self, fn: Callable[[T], T], *args: Any, **kwargs: Any) -> T:
-        # Without transaction support yet, alter applies immediately
-        current = self._read_raw()
+        tx = _get_current_transaction()
+        if tx is None:
+            result = [None]
+            from .api import atomically
+            @atomically
+            def _do_alter():
+                inner_tx = _get_current_transaction()
+                current = inner_tx._read_ref(self)
+                new_val = fn(current, *args, **kwargs)
+                inner_tx._write_ref(self, new_val)
+                result[0] = new_val
+            _do_alter()
+            return result[0]
+        
+        current = tx._read_ref(self)
         new_value = fn(current, *args, **kwargs)
-        self.reset(new_value)
+        tx._write_ref(self, new_value)
         return new_value

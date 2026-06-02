@@ -1,6 +1,6 @@
 import itertools
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, FrozenSet, Set
 from .versioning import VersionStamp
 
 
@@ -65,3 +65,19 @@ class TransactionCoordinator:
     def get_ref(self, ref_id: int) -> Optional[Any]:
         with self._refs_lock:
             return self._refs.get(ref_id)
+
+    def detect_conflicts(
+        self,
+        tx: Any,
+        read_set: Dict[int, VersionStamp],
+        write_set: Set[int]
+    ) -> Optional[FrozenSet[int]]:
+        conflicting = set()
+        for ref_id, read_version in read_set.items():
+            ref = self.get_ref(ref_id)
+            if ref is None:
+                continue
+            current_version = ref._get_version()
+            if current_version != read_version:
+                conflicting.add(ref_id)
+        return frozenset(conflicting) if conflicting else None
