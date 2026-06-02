@@ -1,11 +1,18 @@
+import json
 import threading
 import time
-from typing import Callable, Generic, Optional, TypeVar, Tuple, List, Any
+import random
+from typing import Callable, Generic, Optional, TypeVar, Tuple, List, Any, Type
 from .versioning import VersionStamp, _get_current_transaction
-from .exceptions import ValidationException, InvariantViolationException, HistoryExpiredException
+from .exceptions import (
+    ValidationException, InvariantViolationException, HistoryExpiredException,
+    CommitException, STMException
+)
 from .coordinator import TransactionCoordinator
+from .locks import SeqLock
 
 T = TypeVar('T')
+
 
 class RefIdentity:
     """Unique identity for a transactional Ref."""
@@ -25,7 +32,7 @@ class Ref(Generic[T]):
         '_identity', '_value', '_version', '_history',
         '_lock', '_coordinator', '_validators', '_watchers',
         '_max_history', '_min_history', '_watcher_lock',
-        '_invariant', '_access_time'
+        '_invariant', '_access_time', '_seqlock', '_json_encoder'
     )
     
     def __init__(
@@ -34,7 +41,8 @@ class Ref(Generic[T]):
         min_history: int = 0,
         max_history: int = 100,
         validator: Optional[Callable[[T], bool]] = None,
-        name: Optional[str] = None
+        name: Optional[str] = None,
+        json_encoder: Optional[Callable[[T], Any]] = None
     ) -> None:
         self._coordinator = TransactionCoordinator()
         ref_id = self._coordinator.register_ref(self)
@@ -45,6 +53,7 @@ class Ref(Generic[T]):
         self._min_history = min_history
         self._max_history = max_history
         self._lock = threading.RLock()
+        self._seqlock = SeqLock(value)
         self._validators: List[Callable[[T], bool]] = []
         if validator:
             self._validators.append(validator)
@@ -52,6 +61,7 @@ class Ref(Generic[T]):
         self._watcher_lock = threading.Lock()
         self._invariant: Optional[Callable[[T], bool]] = None
         self._access_time = time.time()
+        self._json_encoder = json_encoder or (lambda x: x)
 
     @property
     def id(self) -> int:
@@ -90,6 +100,7 @@ class Ref(Generic[T]):
             self._version = version
             self._access_time = time.time()
             self._trim_history_unlocked(0)
+        self._seqlock.write(value)
         return lambda: self._notify_watchers(old_value, value)
 
     def _trim_history_unlocked(self, retention_logical_time: int) -> None:
@@ -122,7 +133,10 @@ class Ref(Generic[T]):
     def deref(self) -> T:
         tx = _get_current_transaction()
         if tx is None:
-            return self._read_raw()
+            try:
+                return self._seqlock.read()
+            except (HistoryExpiredException, TimeoutException):
+                return self._read_raw()
         return tx._read_ref(self)
 
     @property
@@ -167,3 +181,137 @@ class Ref(Generic[T]):
         new_value = fn(current, *args, **kwargs)
         tx._write_ref(self, new_value)
         return new_value
+
+    def read(self) -> T:
+        try:
+            return self._seqlock.read()
+        except TimeoutException:
+            return self._read_raw()
+
+    def add_validator(self, validator: Callable[[T], bool]) -> 'Ref[T]':
+        with self._lock:
+            self._validators.append(validator)
+        return self
+
+    def add_watcher(self, key: str, watcher: Callable[[T, T], None]) -> 'Ref[T]':
+        with self._watcher_lock:
+            self._watchers[key] = watcher
+        return self
+
+    def remove_watcher(self, key: str) -> None:
+        with self._watcher_lock:
+            self._watchers.pop(key, None)
+
+    def to_json(self) -> str:
+        value = self._seqlock.read()
+        encoded = self._json_encoder(value)
+        return json.dumps(encoded, default=str)
+
+    @classmethod
+    def from_json(
+        cls: Type['Ref[T]'], 
+        json_str: str, 
+        decoder: Optional[Callable[[Any], T]] = None
+    ) -> 'Ref[T]':
+        decoded = json.loads(json_str)
+        if decoder:
+            value = decoder(decoded)
+        else:
+            value = decoded
+        return cls(value)
+
+
+class Atom(Generic[T]):
+    """Lock-free atomic reference wrapper powered by SeqLock."""
+    __slots__ = ('_seqlock', '_validator', '_watchers', '_watcher_lock', '_json_encoder')
+
+    def __init__(
+        self,
+        value: T,
+        validator: Optional[Callable[[T], bool]] = None,
+        json_encoder: Optional[Callable[[T], Any]] = None
+    ) -> None:
+        self._seqlock = SeqLock(value)
+        self._validator = validator
+        self._watchers: dict[str, Callable[[T, T], None]] = {}
+        self._watcher_lock = threading.Lock()
+        self._json_encoder = json_encoder or (lambda x: x)
+
+    def deref(self) -> T:
+        return self._seqlock.read()
+
+    def reset(self, new_value: T) -> T:
+        if self._validator and not self._validator(new_value):
+            raise ValidationException("Atom validation failed")
+        old_value = self._seqlock.read()
+        self._seqlock.write(new_value)
+        self._notify_watchers(old_value, new_value)
+        return new_value
+
+    def swap(self, fn: Callable[[T], T], *args: Any, **kwargs: Any) -> T:
+        retries = 0
+        while True:
+            expected_seq = self._seqlock.read_seq()
+            if expected_seq & 1:
+                retries += 1
+                time.sleep(min(0.001, 1e-6 * (2 ** min(retries, 10))))
+                continue
+
+            old_value = self._seqlock.read_value()
+            new_value = fn(old_value, *args, **kwargs)
+            if self._validator and not self._validator(new_value):
+                raise ValidationException("Atom validation failed")
+
+            if self._seqlock.cas(expected_seq, old_value, new_value):
+                self._notify_watchers(old_value, new_value)
+                return new_value
+
+            retries += 1
+            if retries > 1000:
+                raise CommitException("Atom.swap exceeded max retries")
+            backoff = min(0.1, 0.0001 * (2 ** min(retries, 10)))
+            time.sleep(backoff * (0.5 + random.random()))
+
+    def compare_and_set(self, expected: T, new_value: T) -> bool:
+        if self._validator and not self._validator(new_value):
+            raise ValidationException("Atom validation failed")
+        success = self._seqlock.cas_value(expected, new_value)
+        if success:
+            self._notify_watchers(expected, new_value)
+        return success
+
+    def _notify_watchers(self, old_value: T, new_value: T) -> None:
+        with self._watcher_lock:
+            watchers = list(self._watchers.values())
+        for watcher in watchers:
+            try:
+                watcher(old_value, new_value)
+            except Exception:
+                pass
+
+    def add_watcher(self, key: str, watcher: Callable[[T, T], None]) -> 'Atom[T]':
+        with self._watcher_lock:
+            self._watchers[key] = watcher
+        return self
+
+    def remove_watcher(self, key: str) -> None:
+        with self._watcher_lock:
+            self._watchers.pop(key, None)
+
+    def to_json(self) -> str:
+        value = self._seqlock.read()
+        encoded = self._json_encoder(value)
+        return json.dumps(encoded, default=str)
+
+    @classmethod
+    def from_json(
+        cls: Type['Atom[T]'], 
+        json_str: str, 
+        decoder: Optional[Callable[[Any], T]] = None
+    ) -> 'Atom[T]':
+        decoded = json.loads(json_str)
+        if decoder:
+            value = decoder(decoded)
+        else:
+            value = decoded
+        return cls(value)

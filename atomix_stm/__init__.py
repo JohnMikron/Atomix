@@ -11,9 +11,10 @@ from .exceptions import (
     QueueClosedException,
 )
 from .versioning import TransactionState, VersionStamp
-from .ref import Ref, RefIdentity
+from .ref import Ref, RefIdentity, Atom
 from .transaction import Transaction
 from .api import transaction, dosync, atomically, alter, write, read
+from .locks import SeqLock, SpinLock, RWLock
 
 __version__ = "4.3.0"
 __author__ = "John Mikron"
@@ -34,6 +35,7 @@ __all__ = [
     "VersionStamp",
     "Ref",
     "RefIdentity",
+    "Atom",
     "Transaction",
     "transaction",
     "dosync",
@@ -41,4 +43,7 @@ __all__ = [
     "alter",
     "write",
     "read",
+    "SeqLock",
+    "SpinLock",
+    "RWLock",
 ]

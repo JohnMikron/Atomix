@@ -1,5 +1,9 @@
 import threading
-from typing import Optional
+import time
+from typing import Any, Callable, Generic, Optional, TypeVar
+from .exceptions import TimeoutException
+
+T = TypeVar('T')
 
 
 class SpinLock:
@@ -39,7 +43,7 @@ class SpinLock:
         self.acquire()
         return self
     
-    def __exit__(self, *args: any) -> None:
+    def __exit__(self, *args: Any) -> None:
         self.release()
     
     @property
@@ -88,3 +92,73 @@ class RWLock:
             self._writers -= 1
             self._write_ready.notify_all()
             self._read_ready.notify_all()
+
+
+class SeqLock(Generic[T]):
+    """Sequence lock for lock-free optimistic reads."""
+    __slots__ = ('_sequence', '_value', '_write_lock')
+    
+    def __init__(self, initial_value: T) -> None:
+        self._sequence = 0
+        self._value = initial_value
+        self._write_lock = threading.Lock()
+    
+    def read(self) -> T:
+        spins: int = 0
+        max_spins: int = 100000
+        while True:
+            seq1 = self._sequence
+            if seq1 & 1:
+                spins += 1
+                if spins > max_spins:
+                    raise TimeoutException(
+                        f"SeqLock.read() exceeded {max_spins} spins — "
+                        f"possible writer starvation or deadlock"
+                    )
+                time.sleep(min(0.001, 1e-6 * (2 ** min(spins, 10))))
+                continue
+
+            value = self._value
+            seq2 = self._sequence
+            if seq1 == seq2:
+                return value
+
+            spins += 1
+            if spins > max_spins:
+                raise TimeoutException(
+                    f"SeqLock.read() exceeded {max_spins} spins — "
+                    f"extreme write contention"
+                )
+
+    def write(self, new_value: T) -> None:
+        with self._write_lock:
+            self._sequence += 1
+            self._value = new_value
+            self._sequence += 1
+
+    def get_version(self) -> int:
+        return self._sequence
+
+    def read_seq(self) -> int:
+        return self._sequence
+
+    def read_value(self) -> T:
+        return self._value
+
+    def cas(self, expected_seq: int, expected_value: T, new_value: T) -> bool:
+        with self._write_lock:
+            if self._sequence == expected_seq and self._value == expected_value:
+                self._sequence += 1
+                self._value = new_value
+                self._sequence += 1
+                return True
+            return False
+
+    def cas_value(self, expected_value: T, new_value: T) -> bool:
+        with self._write_lock:
+            if self._value is expected_value or self._value == expected_value:
+                self._sequence += 1
+                self._value = new_value
+                self._sequence += 1
+                return True
+            return False
