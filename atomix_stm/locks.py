@@ -1,21 +1,22 @@
 import threading
 import time
-from typing import Any, Callable, Generic, Optional, TypeVar
+from typing import Any, Generic, Optional, TypeVar
 from .exceptions import TimeoutException
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class SpinLock:
     """Lightweight reentrant spin lock wrapper around threading.RLock."""
-    __slots__ = ('_lock', '_owner', '_spin_count', '_recursion_count')
-    
+
+    __slots__ = ("_lock", "_owner", "_spin_count", "_recursion_count")
+
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._owner: Optional[int] = None
         self._spin_count = 0
         self._recursion_count = 0
-    
+
     def acquire(self, timeout: Optional[float] = None) -> bool:
         if timeout is None:
             timeout = -1.0
@@ -30,7 +31,7 @@ class SpinLock:
                 self._recursion_count += 1
             return True
         return False
-    
+
     def release(self) -> None:
         if self._owner != threading.current_thread().ident:
             raise RuntimeError("Lock not owned by current thread")
@@ -38,14 +39,14 @@ class SpinLock:
         if self._recursion_count == 0:
             self._owner = None
         self._lock.release()
-    
-    def __enter__(self) -> 'SpinLock':
+
+    def __enter__(self) -> "SpinLock":
         self.acquire()
         return self
-    
+
     def __exit__(self, *args: Any) -> None:
         self.release()
-    
+
     @property
     def spin_count(self) -> int:
         return self._spin_count
@@ -53,6 +54,7 @@ class SpinLock:
 
 class RWLock:
     """Reader-Writer lock allowing multiple readers or a single writer."""
+
     def __init__(self) -> None:
         self._readers = 0
         self._writers = 0
@@ -60,7 +62,7 @@ class RWLock:
         self._lock = threading.RLock()
         self._read_ready = threading.Condition(self._lock)
         self._write_ready = threading.Condition(self._lock)
-    
+
     def acquire_read(self, timeout: Optional[float] = None) -> bool:
         with self._read_ready:
             while self._writers > 0 or self._pending_writers > 0:
@@ -68,13 +70,13 @@ class RWLock:
                     return False
             self._readers += 1
             return True
-    
+
     def release_read(self) -> None:
         with self._read_ready:
             self._readers -= 1
             if self._readers == 0:
                 self._write_ready.notify_all()
-    
+
     def acquire_write(self, timeout: Optional[float] = None) -> bool:
         with self._write_ready:
             self._pending_writers += 1
@@ -86,7 +88,7 @@ class RWLock:
                 return True
             finally:
                 self._pending_writers -= 1
-    
+
     def release_write(self) -> None:
         with self._write_ready:
             self._writers -= 1
@@ -96,13 +98,14 @@ class RWLock:
 
 class SeqLock(Generic[T]):
     """Sequence lock for lock-free optimistic reads."""
-    __slots__ = ('_sequence', '_value', '_write_lock')
-    
+
+    __slots__ = ("_sequence", "_value", "_write_lock")
+
     def __init__(self, initial_value: T) -> None:
         self._sequence = 0
         self._value = initial_value
         self._write_lock = threading.Lock()
-    
+
     def read(self) -> T:
         spins: int = 0
         max_spins: int = 100000
@@ -112,7 +115,7 @@ class SeqLock(Generic[T]):
                 spins += 1
                 if spins > max_spins:
                     raise TimeoutException(
-                        f"SeqLock.read() exceeded {max_spins} spins — "
+                        f"SeqLock.read() exceeded {max_spins} spins - "
                         f"possible writer starvation or deadlock"
                     )
                 time.sleep(min(0.001, 1e-6 * (2 ** min(spins, 10))))
@@ -126,7 +129,7 @@ class SeqLock(Generic[T]):
             spins += 1
             if spins > max_spins:
                 raise TimeoutException(
-                    f"SeqLock.read() exceeded {max_spins} spins — "
+                    f"SeqLock.read() exceeded {max_spins} spins - "
                     f"extreme write contention"
                 )
 

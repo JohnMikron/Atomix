@@ -13,16 +13,45 @@ from .exceptions import (
 from .versioning import TransactionState, VersionStamp
 from .ref import Ref, RefIdentity, Atom
 from .transaction import Transaction
-from .api import transaction, dosync, atomically, alter, write, read
+from .api import (
+    transaction,
+    dosync,
+    atomically,
+    alter,
+    write,
+    read,
+    transactional,
+    commute,
+    ensure,
+    retry,
+    io,
+    get_stm_stats,
+    dump_stm_stats,
+    reset_stm,
+    Snapshot,
+    get_snapshot_at,
+    get_history,
+    run_concurrent,
+    ref,
+    atom,
+)
 from .locks import SeqLock, SpinLock, RWLock
 from .persistent import PersistentVector, PersistentHashMap
 from .primitives import STMQueue, STMAgent, STMVar
+from .coordinator import (
+    TransactionCoordinator,
+    ContentionManager,
+    HistoryManager,
+    STMReaper,
+)
 
 __version__ = "4.3.0"
 __author__ = "John Mikron"
 __license__ = "MIT"
 
 __all__ = [
+    "ref",
+    "atom",
     "STMException",
     "RetryException",
     "CommitException",
@@ -45,6 +74,18 @@ __all__ = [
     "alter",
     "write",
     "read",
+    "transactional",
+    "commute",
+    "ensure",
+    "retry",
+    "io",
+    "get_stm_stats",
+    "dump_stm_stats",
+    "reset_stm",
+    "Snapshot",
+    "get_snapshot_at",
+    "get_history",
+    "run_concurrent",
     "SeqLock",
     "SpinLock",
     "RWLock",
@@ -53,4 +94,8 @@ __all__ = [
     "STMQueue",
     "STMAgent",
     "STMVar",
+    "TransactionCoordinator",
+    "ContentionManager",
+    "HistoryManager",
+    "STMReaper",
 ]

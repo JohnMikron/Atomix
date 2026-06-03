@@ -1,11 +1,13 @@
 import time
+import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any
+from typing import Any, Optional
 
 
 class TransactionState(Enum):
     """Lifecycle states of an STM transaction."""
+
     ACTIVE = auto()
     PREPARING = auto()
     COMMITTING = auto()
@@ -17,6 +19,7 @@ class TransactionState(Enum):
 @dataclass(slots=True)
 class VersionStamp:
     """Immutable version stamp representing a specific logical point in time."""
+
     epoch: int = 0
     logical_time: int = 0
     transaction_id: int = 0
@@ -25,9 +28,11 @@ class VersionStamp:
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, VersionStamp):
             return False
-        return (self.epoch == other.epoch and 
-                self.logical_time == other.logical_time and
-                self.transaction_id == other.transaction_id)
+        return (
+            self.epoch == other.epoch
+            and self.logical_time == other.logical_time
+            and self.transaction_id == other.transaction_id
+        )
 
     def __lt__(self, other: Any) -> bool:
         if not isinstance(other, VersionStamp):
@@ -40,3 +45,16 @@ class VersionStamp:
 
     def __hash__(self) -> int:
         return hash((self.epoch, self.logical_time, self.transaction_id))
+
+
+_tx_context = threading.local()
+
+
+def _get_current_transaction() -> Optional[Any]:
+    """Get the current thread-active Transaction object."""
+    return getattr(_tx_context, "tx", None)
+
+
+def _set_current_transaction(tx: Optional[Any]) -> None:
+    """Set the current thread-active Transaction object."""
+    _tx_context.tx = tx
