@@ -1,0 +1,53 @@
+name: Python Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    - name: Set up Python 3.13
+      uses: actions/setup-python@f6771392095f09623e861d8c11432f81014a60f6 # v5.1.1
+      with:
+        python-version: "3.13"
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff mypy pytest
+        pip install -e .
+    - name: Run Ruff Format and Lint Checks
+      run: |
+        ruff check atomix_stm
+        ruff format --check atomix_stm
+    - name: Run Mypy Strict Type Checking
+      run: |
+        mypy --strict atomix_stm
+
+  test:
+    needs: lint-and-typecheck
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.13-dev"]
+
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@f6771392095f09623e861d8c11432f81014a60f6 # v5.1.1
+      with:
+        python-version: ${{ matrix.python-version }}
+        allow-prereleases: true
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest
+        pip install -e .
+    - name: Run Pytest Suite
+      run: |
+        python -m pytest tests/
