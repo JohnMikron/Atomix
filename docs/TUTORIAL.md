@@ -23,14 +23,17 @@ from atomix_stm import Atom, dosync
 # Initialize shared state
 balance = Atom(1000)
 
+
 def deposit(amount):
     def tx():
         current = balance.deref()  # Get current value
         balance.reset(current + amount)  # Propose new value
+
     dosync(tx)
 
+
 deposit(500)
-print(f"New Balance: {balance.deref()}") # 1500
+print(f"New Balance: {balance.deref()}")  # 1500
 ```
 
 ## 2. Transactions and Composition
@@ -43,20 +46,22 @@ from atomix_stm import Atom, dosync
 acc1 = Atom(1000)
 acc2 = Atom(500)
 
+
 def transfer(from_acc, to_acc, amount):
     def tx():
         v1 = from_acc.deref()
         if v1 < amount:
             raise ValueError("Insufficient funds")
-        
+
         v2 = to_acc.deref()
-        
+
         from_acc.reset(v1 - amount)
         to_acc.reset(v2 + amount)
-    
-    # This whole block is ATOMIC. 
+
+    # This whole block is ATOMIC.
     # Either both balances update, or neither does.
     dosync(tx)
+
 
 transfer(acc1, acc2, 200)
 ```
@@ -81,8 +86,10 @@ from atomix_stm import Atom, dosync, retry
 
 queue = Atom([])
 
+
 def produce(item):
     queue.swap(lambda q: q + [item])
+
 
 def consume():
     def tx():
@@ -90,12 +97,12 @@ def consume():
         if not q:
             # This transaction will block until 'queue' is modified
             # by another thread, then it will automatically retry.
-            retry() 
-        
+            retry()
+
         item = q[0]
         queue.reset(q[1:])
         return item
-    
+
     return dosync(tx)
 ```
 
@@ -109,10 +116,11 @@ def must_be_positive(val):
         raise ValueError("Must be positive")
     return True
 
+
 balance = Atom(100, validator=must_be_positive)
 
 # This will raise ValueError and roll back the transaction
-# balance.swap(lambda x: x - 200) 
+# balance.swap(lambda x: x - 200)
 ```
 
 ---

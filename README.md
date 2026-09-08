@@ -29,6 +29,7 @@ from atomix_stm import Ref, dosync, atomically
 balance_a = Ref(1000)
 balance_b = Ref(500)
 
+
 # 2. Perform atomic operations
 @atomically
 def transfer():
@@ -36,6 +37,7 @@ def transfer():
         raise ValueError("Insufficient funds")
     balance_a.alter(lambda x: x - 200)
     balance_b.alter(lambda x: x + 200)
+
 
 # 3. Safe, concurrent execution
 transfer()
@@ -83,10 +85,13 @@ from atomix_stm import Ref, atomically, dosync
 
 counter = Ref(0)
 
+
 # Decorator form
 @atomically
 def increment():
     counter.alter(lambda x: x + 1)
+
+
 increment()
 
 # Function form
@@ -105,17 +110,19 @@ from atomix_stm import Ref, atomically, savepoint, SavepointRollbackException
 account = Ref(100)
 log = Ref([])
 
+
 @atomically
 def risky_operation():
     account.alter(lambda x: x - 50)
-    
+
     # Try a speculative branch
     with savepoint():
         account.alter(lambda x: x - 1000)  # Overdraft
         # Rolled back automatically on SavepointRollbackException
         raise SavepointRollbackException("Branch cancelled")
-    
+
     log.alter(lambda l: l + ["Branch handled safely"])
+
 
 risky_operation()
 print(account.value)  # 50 (overdraft was undone, top-level change persisted)
@@ -152,8 +159,10 @@ from atomix_stm import promise, run_concurrent
 
 p = promise()
 
+
 def worker():
     p.deliver("computed result")
+
 
 run_concurrent([worker])
 result = p.deref(timeout=2.0)
