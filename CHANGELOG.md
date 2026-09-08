@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
 - **GitHub Actions Setup Python CI Bug (#38)**: Corrected corrupted/invalid commit SHA in workflows (`.github/workflows/python-package.yml` and `test.yml`) to verified `actions/setup-python` v5.6.0.
 - **Benchmark Code Quality**: Eliminated all unused imports and formatting lint issues in `benchmarks/benchmark_stm.py` and `compare_locks_vs_stm.py`.
 - **PEP 621 Build Compliance**: Modernized `pyproject.toml` with `license = "MIT"` to eliminate build deprecation warnings.
+- **CI Linter & Formatter Stability**: Added explicit `[tool.ruff]` configuration in `pyproject.toml` and standardized documentation code block formatting to maintain seamless compatibility with Ruff 0.16+.
 
 ## [4.3.0] - 2026-06-03
 
