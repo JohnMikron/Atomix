@@ -21,6 +21,7 @@ from .exceptions import (
     TimeoutException,
     TransactionAbortedException,
     RetryException,
+    SavepointRollbackException,
 )
 
 T = TypeVar("T")
@@ -51,8 +52,42 @@ class CommuteEntry(Generic[T]):
     kwargs: Dict[str, Any]
 
 
+@dataclass
+class Savepoint:
+    """Internal savepoint state for partial rollback within a transaction."""
+
+    id: int
+    read_log: Dict[int, ReadLogEntry]
+    write_log: Dict[int, WriteLogEntry[Any]]
+    commutes: Dict[int, List[CommuteEntry[Any]]]
+
+
+class SavepointContext:
+    """Context manager for scoping operations with automatic rollback to a savepoint on failure."""
+
+    def __init__(self, tx: "Transaction") -> None:
+        self.tx = tx
+        self.savepoint: Optional[Savepoint] = None
+
+    def __enter__(self) -> "SavepointContext":
+        self.savepoint = self.tx.create_savepoint()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+        if exc_type is not None:
+            if not issubclass(exc_type, (RetryException, ConflictException)):
+                assert self.savepoint is not None
+                self.tx.rollback_to_savepoint(self.savepoint)
+                if issubclass(exc_type, SavepointRollbackException):
+                    return True
+        return False
+
+
 class Transaction:
-    """STM transaction implementing Snapshot Isolation with validation and commit retry."""
+    """
+    STM transaction implementing Snapshot Isolation with TL2 two-phase locking,
+    fine-grained concurrent commits, validation, and commit retry.
+    """
 
     def __init__(
         self,
@@ -75,6 +110,7 @@ class Transaction:
         self._retry_count = 0
         self._lock = threading.RLock()
         self._depth = 0
+        self._savepoint_counter = 0
 
     @property
     def state(self) -> TransactionState:
@@ -99,6 +135,32 @@ class Transaction:
             self._state = TransactionState.ABORTED
             self._coordinator.record_abort()
             raise TimeoutException(f"Transaction {self.id} timed out")
+
+    def create_savepoint(self) -> Savepoint:
+        """Create a savepoint capturing the current transaction logs."""
+        with self._lock:
+            self._check_active()
+            self._savepoint_counter += 1
+            return Savepoint(
+                id=self._savepoint_counter,
+                read_log=dict(self._read_log),
+                write_log=dict(self._write_log),
+                commutes={k: list(v) for k, v in self._commutes.items()},
+            )
+
+    def rollback_to_savepoint(self, savepoint: Savepoint) -> None:
+        """Restore transaction state to the given savepoint."""
+        with self._lock:
+            self._check_active()
+            self._read_log = dict(savepoint.read_log)
+            self._write_log = dict(savepoint.write_log)
+            self._commutes = defaultdict(
+                list, {k: list(v) for k, v in savepoint.commutes.items()}
+            )
+
+    def savepoint(self) -> SavepointContext:
+        """Context manager for atomic sub-operations that roll back on error."""
+        return SavepointContext(self)
 
     def _read_ref(self, ref: Any) -> Any:
         with self._lock:
@@ -165,12 +227,11 @@ class Transaction:
 
     def _prepare_inside_lock(self) -> Tuple[bool, Optional[FrozenSet[int]]]:
         """
-        2PC prepare phase, to be called while the coordinator's commit lock is held.
+        2PC prepare phase called while write locks are held.
 
         Detects write-write conflicts between this transaction's read set and the
-        live versions of the refs it touched. Conflicting refs are reported back
-        to the caller and recorded on the coordinator so the ``total_conflicts``
-        diagnostic reflects the real contention rate rather than zero.
+        live versions of the refs it touched. Conflicting refs are recorded on the
+        coordinator so total_conflicts diagnostic reflects real contention.
         """
         read_set = {rid: entry.version_read for rid, entry in self._read_log.items()}
         write_set = set(self._write_log.keys()) | set(self._commutes.keys())
@@ -192,27 +253,74 @@ class Transaction:
                 raise TimeoutException("Transaction timeout during commit")
             self._state = TransactionState.PREPARING
 
+        commit_start_time = time.time()
         try:
-            notifications = []
-            with self._coordinator._commit_lock:
-                success, conflicts = self._prepare_inside_lock()
-                if not success and conflicts:
-                    self._coordinator.contention.record_conflict(
-                        conflicts, self._retry_count
-                    )
-                    raise ConflictException(
-                        f"Transaction conflicted on refs {conflicts}",
-                        conflicting_refs=conflicts,
-                    )
+            notifications: List[Callable[[], None]] = []
 
-                self._state = TransactionState.COMMITTING
-                self._apply_commutes()
-                commit_version = self._coordinator.create_version_stamp(self.id)
-                for ref_id, entry in self._write_log.items():
-                    ref = self._coordinator.get_ref(ref_id)
-                    if ref is not None:
-                        notif_fn = ref._commit_value(entry.new_value, commit_version)
-                        notifications.append(notif_fn)
+            # Determine whether fine-grained concurrent commit or coarse lock is active
+            use_fine_grained = getattr(
+                self._coordinator, "_use_fine_grained_commits", True
+            )
+
+            if use_fine_grained:
+                # TL2 Algorithm: Acquire individual Ref write locks in strictly ascending numerical order
+                # This guarantees mathematical deadlock freedom while allowing disjoint transactions to commit concurrently
+                write_set = set(self._write_log.keys()) | set(self._commutes.keys())
+                sorted_ref_ids = sorted(write_set)
+                acquired_locks = []
+
+                try:
+                    for rid in sorted_ref_ids:
+                        ref_obj = self._coordinator.get_ref(rid)
+                        if ref_obj is not None:
+                            ref_obj._lock.acquire()
+                            acquired_locks.append(ref_obj._lock)
+
+                    success, conflicts = self._prepare_inside_lock()
+                    if not success and conflicts:
+                        self._coordinator.contention.record_conflict(
+                            conflicts, self._retry_count
+                        )
+                        raise ConflictException(
+                            f"Transaction conflicted on refs {conflicts}",
+                            conflicting_refs=conflicts,
+                        )
+
+                    self._state = TransactionState.COMMITTING
+                    self._apply_commutes()
+                    commit_version = self._coordinator.create_version_stamp(self.id)
+                    for ref_id, entry in self._write_log.items():
+                        ref = self._coordinator.get_ref(ref_id)
+                        if ref is not None:
+                            notif_fn = ref._commit_value(
+                                entry.new_value, commit_version
+                            )
+                            notifications.append(notif_fn)
+                finally:
+                    for lock in reversed(acquired_locks):
+                        lock.release()
+            else:
+                with self._coordinator._commit_lock:
+                    success, conflicts = self._prepare_inside_lock()
+                    if not success and conflicts:
+                        self._coordinator.contention.record_conflict(
+                            conflicts, self._retry_count
+                        )
+                        raise ConflictException(
+                            f"Transaction conflicted on refs {conflicts}",
+                            conflicting_refs=conflicts,
+                        )
+
+                    self._state = TransactionState.COMMITTING
+                    self._apply_commutes()
+                    commit_version = self._coordinator.create_version_stamp(self.id)
+                    for ref_id, entry in self._write_log.items():
+                        ref = self._coordinator.get_ref(ref_id)
+                        if ref is not None:
+                            notif_fn = ref._commit_value(
+                                entry.new_value, commit_version
+                            )
+                            notifications.append(notif_fn)
 
             self._state = TransactionState.COMMITTED
             for notif in notifications:
@@ -220,6 +328,8 @@ class Transaction:
             all_refs = set(self._write_log.keys()) | set(self._read_log.keys())
             self._coordinator.contention.record_success(all_refs)
             self._coordinator.record_commit()
+            if hasattr(self._coordinator, "record_latency"):
+                self._coordinator.record_latency(time.time() - commit_start_time)
             return True
         except Exception:
             self._state = TransactionState.ABORTED

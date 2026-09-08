@@ -62,3 +62,9 @@ class QueueClosedException(STMException):
     """Raised when an operation is performed on a closed STMQueue."""
 
     pass
+
+
+class SavepointRollbackException(STMException):
+    """Raised to trigger an explicit rollback to a savepoint without aborting the parent transaction."""
+
+    pass

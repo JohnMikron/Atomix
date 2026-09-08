@@ -125,20 +125,20 @@ class TestMonitoringImport(unittest.TestCase):
 
 
 class TestVersionReaper(unittest.TestCase):
-    """Version should be 4.3.0 everywhere."""
+    """Version should be 4.4.0 everywhere."""
 
     def test_core_version(self):
-        self.assertEqual(__version__, "4.3.0")
+        self.assertEqual(__version__, "4.4.0")
 
     def test_init_version(self):
         import atomix_stm
 
-        self.assertEqual(atomix_stm.__version__, "4.3.0")
+        self.assertEqual(atomix_stm.__version__, "4.4.0")
 
     def test_docstring_version(self):
         import atomix_stm.core as core_module
 
-        self.assertIn("4.3.0", core_module.__doc__)
+        self.assertIn("4.4.0", core_module.__doc__)
 
 
 if __name__ == "__main__":

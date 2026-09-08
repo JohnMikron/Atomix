@@ -1,10 +1,11 @@
+import logging
 import threading
 import time
-import logging
-from typing import Any, Callable, Generic, List, Optional, TypeVar, cast, ClassVar
-from .ref import Ref, Atom
-from .exceptions import QueueClosedException, TimeoutException
+from typing import Any, Callable, ClassVar, Generic, List, Optional, TypeVar, cast
+
 from .api import atomically
+from .exceptions import QueueClosedException, TimeoutException
+from .ref import Atom, Ref
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -253,3 +254,100 @@ class STMVar(Generic[T]):
                     delattr(self.local, "value")
 
         return BindingContext(self._local, value, self._root_value)
+
+
+class STMPromise(Generic[T]):
+    """
+    Transactional promise providing write-once atomic resolution.
+
+    Can be safely delivered from inside or outside an STM transaction.
+    Consumers can wait with timeout or poll realization state.
+    """
+
+    __slots__ = ("_value", "_realized", "_lock", "_cond", "_name")
+
+    def __init__(self, name: Optional[str] = None) -> None:
+        self._value: Optional[T] = None
+        self._realized = False
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+        self._name = name
+
+    def deliver(self, value: T) -> bool:
+        """
+        Deliver a value to the promise. Returns True if this call realized
+        the promise, or False if the promise was already delivered.
+        """
+        with self._lock:
+            if self._realized:
+                return False
+            self._value = value
+            self._realized = True
+            self._cond.notify_all()
+            return True
+
+    def deref(self, timeout: Optional[float] = None) -> T:
+        """
+        Retrieve the delivered value. Blocks until delivery or timeout.
+        Raises TimeoutException if timeout expires.
+        """
+        with self._lock:
+            if not self._realized:
+                if not self._cond.wait(timeout=timeout):
+                    raise TimeoutException(
+                        f"STMPromise {self._name or ''} deref timed out after {timeout}s"
+                    )
+            return cast(T, self._value)
+
+    def is_realized(self) -> bool:
+        """Return whether this promise has been fulfilled."""
+        with self._lock:
+            return self._realized
+
+    @property
+    def value(self) -> Optional[T]:
+        """Non-blocking access to the realized value (or None if unfulfilled)."""
+        with self._lock:
+            return self._value
+
+
+class STMChannel(Generic[T]):
+    """
+    Multi-producer, multi-consumer transactional communication channel.
+
+    Enables message passing with atomic transactions, buffering, and backpressure.
+    """
+
+    __slots__ = ("_queue", "_name")
+
+    def __init__(self, maxsize: int = 0, name: Optional[str] = None) -> None:
+        self._queue: STMQueue[T] = STMQueue(maxsize=maxsize, name=name)
+        self._name = name
+
+    def send(self, item: T, timeout: Optional[float] = None) -> bool:
+        """Send an item to the channel. Returns False if channel is closed."""
+        return self._queue.put(item, timeout=timeout)
+
+    def receive(self, timeout: Optional[float] = None) -> Optional[T]:
+        """Receive an item from the channel. Raises QueueClosedException if closed."""
+        return self._queue.get(timeout=timeout)
+
+    def close(self) -> None:
+        """Close the channel."""
+        self._queue.close()
+
+    def is_closed(self) -> bool:
+        """Check if the channel has been closed."""
+        return self._queue.is_closed()
+
+    def size(self) -> int:
+        """Get current number of queued items."""
+        return self._queue.size()
+
+    def empty(self) -> bool:
+        """Check if channel has no items."""
+        return self._queue.empty()
+
+    def full(self) -> bool:
+        """Check if channel buffer is full."""
+        return self._queue.full()

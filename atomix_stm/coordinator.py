@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple, cast
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 from .versioning import VersionStamp
 
 PY_VERSION = sys.version_info
@@ -66,7 +66,7 @@ def _safe_log_error(msg: str) -> None:
 
 
 class ContentionManager:
-    """Adaptive contention management preventing livelock."""
+    """Adaptive contention management preventing livelock with dynamic contention intensity tracking."""
 
     def __init__(
         self,
@@ -103,12 +103,15 @@ class ContentionManager:
             self._history_window.append(time.time())
             if len(self._history_window) > self._max_history:
                 self._history_window.pop(0)
+            total = self._total_commits + self._total_retries
+            intensity = (self._total_retries / total) if total > 0 else 0.0
 
         exponent = min(max_score + retry_count, 15)
         backoff = self._base_backoff * (2**exponent)
         backoff = min(backoff, self._max_backoff)
-        jitter = backoff * self._jitter_factor * random.random()
-        return cast(float, backoff + jitter)
+        effective_jitter = self._jitter_factor * (1.0 + intensity)
+        jitter = backoff * effective_jitter * random.random()
+        return float(min(backoff + jitter, self._max_backoff))
 
     def record_success(self, ref_ids: Set[int]) -> None:
         with self._contention_lock:
@@ -153,11 +156,15 @@ class ContentionManager:
             max_score = max(
                 (self._contention_scores.get(rid, 0) for rid in ref_ids), default=0
             )
+            total = self._total_commits + self._total_retries
+            intensity = (self._total_retries / total) if total > 0 else 0.0
+
         exponent = min(retry_count + max_score, 15)
         backoff = self._base_backoff * (2**exponent)
         backoff = min(backoff, self._max_backoff)
-        jitter = backoff * self._jitter_factor * random.random()
-        return cast(float, backoff + jitter)
+        effective_jitter = self._jitter_factor * (1.0 + intensity)
+        jitter = backoff * effective_jitter * random.random()
+        return float(min(backoff + jitter, self._max_backoff))
 
     def get_metrics(self) -> Dict[str, Any]:
         with self._contention_lock:
@@ -367,12 +374,15 @@ class TransactionCoordinator:
         self._contention_manager = ContentionManager()
         self._history_manager = HistoryManager()
         self._commit_lock = threading.RLock()
+        self._use_fine_grained_commits = True
+        self._latencies: List[float] = []
+        self._latency_lock = threading.RLock()
         self._reaper = STMReaper(self, interval=5.0)
         self._reaper.start()
         atexit.register(self._reaper.stop)
 
         self._stats_lock = threading.RLock()
-        self._stats = {
+        self._stats: Dict[str, Any] = {
             "total_transactions": 0,
             "total_commits": 0,
             "total_aborts": 0,
@@ -392,6 +402,8 @@ class TransactionCoordinator:
                 "total_aborts": 0,
                 "total_conflicts": 0,
             }
+            with self._latency_lock:
+                self._latencies.clear()
             self._contention_manager.reset()
             self._history_manager.reset()
             if hasattr(self, "_reaper") and self._reaper.is_alive():
@@ -399,6 +411,13 @@ class TransactionCoordinator:
             self._reaper = STMReaper(self, interval=5.0)
             self._reaper.start()
             atexit.register(self._reaper.stop)
+
+    def record_latency(self, latency: float) -> None:
+        """Record commit latency sample."""
+        with self._latency_lock:
+            self._latencies.append(latency)
+            if len(self._latencies) > 2000:
+                self._latencies.pop(0)
 
     def new_transaction_id(self) -> int:
         with self._stats_lock:
@@ -488,13 +507,27 @@ class TransactionCoordinator:
 
     def get_stats(self) -> Dict[str, Any]:
         with self._stats_lock:
-            stats = dict(self._stats)
+            stats: Dict[str, Any] = dict(self._stats)
         stats.update(self._contention_manager.get_metrics())
         stats.update(self._history_manager.get_stats())
         with self._txs_lock:
             stats["active_transactions"] = len(self._active_txs)
         with self._refs_lock:
             stats["registered_refs"] = len(self._refs)
+
+        with self._latency_lock:
+            if self._latencies:
+                sorted_lats = sorted(self._latencies)
+                n = len(sorted_lats)
+                stats["latency_p50"] = sorted_lats[int(n * 0.50)]
+                stats["latency_p99"] = sorted_lats[min(int(n * 0.99), n - 1)]
+                stats["latency_avg"] = sum(sorted_lats) / n
+            else:
+                stats["latency_p50"] = 0.0
+                stats["latency_p99"] = 0.0
+                stats["latency_avg"] = 0.0
+
+        stats["fine_grained_commits"] = self._use_fine_grained_commits
         return stats
 
     def get_refs_snapshot(self) -> List[Any]:

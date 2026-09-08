@@ -1,8 +1,9 @@
-"""Compatibility shim for Atomix v4.3.0.
+"""Compatibility shim for Atomix v4.4.0.
 
 Exposes the primary STM types, functions, exception classes, and utility managers
 from the modular package layout to preserve backward compatibility for legacy tests.
-Writes serialize on a single coordinator lock (commit_lock) during commit.
+Writes serialize on a single coordinator lock (commit_lock) during commit or execute
+concurrently via fine-grained TL2 ordered locking.
 """
 
 from .exceptions import (
@@ -16,6 +17,7 @@ from .exceptions import (
     HistoryExpiredException,
     InvariantViolationException,
     QueueClosedException,
+    SavepointRollbackException,
 )
 from .versioning import TransactionState, VersionStamp
 from .locks import SpinLock, SeqLock, RWLock
@@ -31,10 +33,15 @@ from .coordinator import (
     _safe_log_error,
     logger,
 )
-from .transaction import Transaction
+from .transaction import Transaction, Savepoint, SavepointContext
 from .ref import Ref, RefIdentity, Atom
-from .persistent import PersistentVector, PersistentHashMap
-from .primitives import STMQueue, STMAgent, STMVar
+from .persistent import (
+    PersistentVector,
+    PersistentHashMap,
+    TransientVector,
+    TransientHashMap,
+)
+from .primitives import STMQueue, STMAgent, STMVar, STMPromise, STMChannel
 from .api import (
     transaction,
     dosync,
@@ -50,9 +57,12 @@ from .api import (
     get_snapshot_at,
     get_history,
     run_concurrent,
+    promise,
+    channel,
+    savepoint,
 )
 
-__version__ = "4.3.0"
+__version__ = "4.4.0"
 
 __all__ = [
     # Core types
@@ -63,17 +73,26 @@ __all__ = [
     "TransactionState",
     "VersionStamp",
     "RefIdentity",
-    # Context managers
+    "Savepoint",
+    "SavepointContext",
+    # Context managers & helpers
     "transaction",
     "dosync",
     "atomically",
+    "promise",
+    "channel",
+    "savepoint",
     # Primitives
     "STMQueue",
     "STMAgent",
     "STMVar",
-    # Persistent structures
+    "STMPromise",
+    "STMChannel",
+    # Persistent structures & transients
     "PersistentVector",
     "PersistentHashMap",
+    "TransientVector",
+    "TransientHashMap",
     "Snapshot",
     # Operations
     "retry",
@@ -107,6 +126,7 @@ __all__ = [
     "HistoryExpiredException",
     "InvariantViolationException",
     "QueueClosedException",
+    "SavepointRollbackException",
     # Compatibility helpers
     "_cleanup",
     "_safe_log_info",

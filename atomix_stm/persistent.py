@@ -20,6 +20,72 @@ K = TypeVar("K")
 V = TypeVar("V")
 
 
+class TransientVector(Generic[T]):
+    """
+    Mutable transient vector for high-performance batch mutations.
+
+    Enables high-throughput mutations inside transactions before
+    freezing back into an immutable PersistentVector in O(1) time.
+    """
+
+    __slots__ = ("_items", "_shift", "_json_encoder", "_editable")
+
+    def __init__(
+        self,
+        items: List[T],
+        shift: int = 5,
+        json_encoder: Optional[Callable[[T], Any]] = None,
+    ) -> None:
+        self._items = items
+        self._shift = shift
+        self._json_encoder = json_encoder or (lambda x: x)
+        self._editable = True
+
+    def _ensure_editable(self) -> None:
+        if not self._editable:
+            raise RuntimeError(
+                "Transient vector cannot be modified after persistent() call"
+            )
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __getitem__(self, index: int) -> T:
+        if index < 0:
+            index += len(self._items)
+        if index < 0 or index >= len(self._items):
+            raise IndexError(f"Index {index} out of range")
+        return self._items[index]
+
+    def conj(self, value: T) -> "TransientVector[T]":
+        self._ensure_editable()
+        self._items.append(value)
+        return self
+
+    def assoc(self, index: int, value: T) -> "TransientVector[T]":
+        self._ensure_editable()
+        if index < 0:
+            index += len(self._items)
+        if index < 0 or index >= len(self._items):
+            raise IndexError(f"Index {index} out of range")
+        self._items[index] = value
+        return self
+
+    def pop(self) -> "TransientVector[T]":
+        self._ensure_editable()
+        if not self._items:
+            raise IndexError("Cannot pop empty vector")
+        self._items.pop()
+        return self
+
+    def persistent(self) -> "PersistentVector[T]":
+        self._ensure_editable()
+        self._editable = False
+        return PersistentVector(
+            tuple(self._items), shift=self._shift, json_encoder=self._json_encoder
+        )
+
+
 class PersistentVector(Generic[T]):
     """Immutable vector wrapper around tuple."""
 
@@ -40,6 +106,12 @@ class PersistentVector(Generic[T]):
         self._shift = shift
         self._json_encoder = json_encoder or (lambda x: x)
         self._hash = _hash
+
+    def as_transient(self) -> TransientVector[T]:
+        """Convert into a mutable TransientVector for high-performance batch updates."""
+        return TransientVector(
+            list(self._items), shift=self._shift, json_encoder=self._json_encoder
+        )
 
     def __len__(self) -> int:
         return len(self._items)
@@ -147,6 +219,56 @@ class PersistentVector(Generic[T]):
         )
 
 
+class TransientHashMap(Generic[K, V]):
+    """
+    Mutable transient hash map for fast batch mutations.
+
+    Enables high-throughput dictionary mutations before freezing
+    back into an immutable PersistentHashMap with zero memory waste.
+    """
+
+    __slots__ = ("_dict", "_json_encoder", "_editable")
+
+    def __init__(
+        self,
+        initial_dict: Dict[K, V],
+        json_encoder: Optional[Callable[[V], Any]] = None,
+    ) -> None:
+        self._dict = dict(initial_dict)
+        self._json_encoder = json_encoder or (lambda x: x)
+        self._editable = True
+
+    def _ensure_editable(self) -> None:
+        if not self._editable:
+            raise RuntimeError(
+                "Transient hash map cannot be modified after persistent() call"
+            )
+
+    def __len__(self) -> int:
+        return len(self._dict)
+
+    def __getitem__(self, key: K) -> V:
+        return self._dict[key]
+
+    def get(self, key: K, default: Any = None) -> Any:
+        return self._dict.get(key, default)
+
+    def assoc(self, key: K, value: V) -> "TransientHashMap[K, V]":
+        self._ensure_editable()
+        self._dict[key] = value
+        return self
+
+    def dissoc(self, key: K) -> "TransientHashMap[K, V]":
+        self._ensure_editable()
+        self._dict.pop(key, None)
+        return self
+
+    def persistent(self) -> "PersistentHashMap[K, V]":
+        self._ensure_editable()
+        self._editable = False
+        return PersistentHashMap.from_dict(self._dict)
+
+
 class PersistentHashMap(Generic[K, V]):
     """Immutable hashmap with structural sharing using HAMT (Hash Array Mapped Trie)."""
 
@@ -167,6 +289,10 @@ class PersistentHashMap(Generic[K, V]):
         self._size = size
         self._hash = _hash
         self._json_encoder = json_encoder or (lambda x: x)
+
+    def as_transient(self) -> TransientHashMap[K, V]:
+        """Convert into a mutable TransientHashMap for high-performance batch updates."""
+        return TransientHashMap(self.to_dict(), json_encoder=self._json_encoder)
 
     def __len__(self) -> int:
         return self._size

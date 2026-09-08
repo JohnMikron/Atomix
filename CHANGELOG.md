@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.4.0] - 2026-09-08
+
+### Added
+- **TL2 Fine-Grained Concurrent Commits**: Replaced the global coarse serial commit lock with canonical sorted per-Ref lock acquisition (`sorted_ref_ids = sorted(write_set)`), enabling transactions touching disjoint `Ref` sets to commit in parallel across CPU cores with zero deadlocks.
+- **Savepoints & Partial Rollback**: Added `savepoint()`, `SavepointContext`, and `SavepointRollbackException` supporting speculative execution branches and failure isolation without aborting the parent transaction.
+- **Clojure-Style Transients**: Added `TransientVector` and `TransientHashMap` with `.as_transient()` on persistent structures, enabling high-performance $O(1)$ batch mutations before freezing with `.persistent()`.
+- **`STMPromise` Primitive**: Added write-once atomic async resolution with timeouts and STM integration.
+- **`STMChannel` Primitive**: Added bounded Go/Clojure core.async style message passing channels with backpressure and retry semantics.
+- **Latency Profiling Telemetry**: Added `avg_latency_ms`, `p50_latency_ms`, and `p99_latency_ms` to `get_stm_stats()`.
+- **Ecosystem Monitoring Module**: Added `examples/ecosystem/monitoring.py` providing the `STMMonitor` class.
+- **Test Suite Expansion**: Added `tests/test_v44_advancements.py` with full coverage for parallel commits, transients, savepoints, channels, promises, and telemetry.
+
+### Fixed
+- **GitHub Actions Setup Python CI Bug (#38)**: Corrected corrupted/invalid commit SHA in workflows (`.github/workflows/python-package.yml` and `test.yml`) to verified `actions/setup-python` v5.6.0.
+- **Benchmark Code Quality**: Eliminated all unused imports and formatting lint issues in `benchmarks/benchmark_stm.py` and `compare_locks_vs_stm.py`.
+- **PEP 621 Build Compliance**: Modernized `pyproject.toml` with `license = "MIT"` to eliminate build deprecation warnings.
+
 ## [4.3.0] - 2026-06-03
 
 ### Fixed (hardening pass)

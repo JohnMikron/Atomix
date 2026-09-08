@@ -9,10 +9,11 @@ from .exceptions import (
     HistoryExpiredException,
     InvariantViolationException,
     QueueClosedException,
+    SavepointRollbackException,
 )
 from .versioning import TransactionState, VersionStamp
 from .ref import Ref, RefIdentity, Atom
-from .transaction import Transaction
+from .transaction import Transaction, Savepoint, SavepointContext
 from .api import (
     transaction,
     dosync,
@@ -34,10 +35,18 @@ from .api import (
     run_concurrent,
     ref,
     atom,
+    promise,
+    channel,
+    savepoint,
 )
 from .locks import SeqLock, SpinLock, RWLock
-from .persistent import PersistentVector, PersistentHashMap
-from .primitives import STMQueue, STMAgent, STMVar
+from .persistent import (
+    PersistentVector,
+    PersistentHashMap,
+    TransientVector,
+    TransientHashMap,
+)
+from .primitives import STMQueue, STMAgent, STMVar, STMPromise, STMChannel
 from .coordinator import (
     TransactionCoordinator,
     ContentionManager,
@@ -45,13 +54,16 @@ from .coordinator import (
     STMReaper,
 )
 
-__version__ = "4.3.0"
+__version__ = "4.4.0"
 __author__ = "John Mikron"
 __license__ = "MIT"
 
 __all__ = [
     "ref",
     "atom",
+    "promise",
+    "channel",
+    "savepoint",
     "STMException",
     "RetryException",
     "CommitException",
@@ -62,12 +74,15 @@ __all__ = [
     "HistoryExpiredException",
     "InvariantViolationException",
     "QueueClosedException",
+    "SavepointRollbackException",
     "TransactionState",
     "VersionStamp",
     "Ref",
     "RefIdentity",
     "Atom",
     "Transaction",
+    "Savepoint",
+    "SavepointContext",
     "transaction",
     "dosync",
     "atomically",
@@ -91,9 +106,13 @@ __all__ = [
     "RWLock",
     "PersistentVector",
     "PersistentHashMap",
+    "TransientVector",
+    "TransientHashMap",
     "STMQueue",
     "STMAgent",
     "STMVar",
+    "STMPromise",
+    "STMChannel",
     "TransactionCoordinator",
     "ContentionManager",
     "HistoryManager",

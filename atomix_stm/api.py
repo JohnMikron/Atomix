@@ -18,9 +18,14 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .versioning import VersionStamp, _get_current_transaction, _set_current_transaction
-from .exceptions import STMException, RetryException, ConflictException, CommitException
+from .exceptions import (
+    STMException,
+    RetryException,
+    ConflictException,
+    CommitException,
+)
 from .coordinator import TransactionCoordinator, logger, PY_VERSION, NO_GIL_ENABLED
-from .transaction import Transaction
+from .transaction import Transaction, SavepointContext
 from .ref import Ref, Atom
 
 R = TypeVar("R")
@@ -111,6 +116,28 @@ def ref(value: T) -> Ref[T]:
 
 def atom(value: T) -> Atom[T]:
     return Atom(value)
+
+
+def promise(name: Optional[str] = None) -> Any:
+    """Create a new transactional STMPromise."""
+    from .primitives import STMPromise
+
+    return STMPromise(name=name)
+
+
+def channel(maxsize: int = 0, name: Optional[str] = None) -> Any:
+    """Create a new transactional STMChannel."""
+    from .primitives import STMChannel
+
+    return STMChannel(maxsize=maxsize, name=name)
+
+
+def savepoint() -> SavepointContext:
+    """Create a savepoint context for partial rollback in the current transaction."""
+    tx = _get_current_transaction()
+    if tx is None:
+        raise STMException("savepoint() requires an active transaction")
+    return cast(SavepointContext, tx.savepoint())
 
 
 def alter(reference: Ref[T], fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
